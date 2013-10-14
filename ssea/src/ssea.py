@@ -20,7 +20,7 @@ import os
 import argparse
 import logging
 
-from algo import ssea
+from algo import ssea, SampleSet
 
 __all__ = []
 __version__ = 0.1
@@ -51,11 +51,14 @@ class ParserError(Exception):
     def __unicode__(self):
         return self.msg
 
-def read_sample_set(sample_set_file):
-    fileh = open(sample_set_file)
-    name = fileh.next()
-    desc = fileh.next()
-    sample_set = set()
+def parse_gmx(filename):
+    fileh = open(filename)
+    names = fileh.next().strip().split('\t')
+    descs = fileh.next().strip().split('\t')
+    if len(names) != len(descs):
+        raise ParserError("Number of fields in differ in columns 1 and 2 of sample set file")
+    sample_sets = [SampleSet(name=n,desc=d,value=set()) for n,d in zip(names,descs)]
+    lineno = 3
     for line in fileh:
         if not line:
             continue
@@ -63,18 +66,20 @@ def read_sample_set(sample_set_file):
         if not line:
             continue
         fields = line.split('\t')
-        if not fields[0]:
-            continue
-        sample_set.add(fields[0])
+        if len(fields) != len(names):
+            raise ParserError("Incorrect number of fields in line %d" % (lineno))
+        for i,f in enumerate(fields):
+            sample_sets[i].value.add(f)
+        lineno += 1
     fileh.close()
-    return name, desc, sample_set
+    return sample_sets
 
-def read_ranks(ranks_file):
+def parse_weights(filename):
     samples = []
-    ranks = []
-    fileh = open(ranks_file)
+    weights = []
+    fileh = open(filename)
     lineno = 1
-    for line in open(ranks_file):
+    for line in open(filename):
         fields = line.strip().split('\t')
         if len(fields) == 0:
             continue
@@ -86,10 +91,10 @@ def read_ranks(ranks_file):
         except ValueError:
             raise ParserError("Value at line number %d cannot be converted to a floating point number" % (lineno))    
         samples.append(sample)
-        ranks.append(rank)
+        weights.append(rank)
         lineno += 1
     fileh.close()
-    return samples,ranks
+    return samples,weights
 
 def main(argv=None):
     '''Command line options.'''    
@@ -125,14 +130,22 @@ USAGE
                             action="store_true", default=False, 
                             help="set verbosity level [default: %(default)s]")
         parser.add_argument('-V', '--version', action='version', version=program_version_message)
-        parser.add_argument('sample_set_file')
-        parser.add_argument('ranks_file')        
+        parser.add_argument('--weight-methods', dest='weight_methods', 
+                            default='weighted,weighted') 
+        parser.add_argument('--weight-params', dest='weight_params', 
+                            default=None)
+        parser.add_argument('--perms', type=int, default=1000)
+        parser.add_argument('--gmx', dest="gmx_file", default=None)
+        parser.add_argument('weights_file') 
         # Process arguments
         args = parser.parse_args()
         verbose = args.verbose
-        sample_set_file = args.sample_set_file
-        ranks_file = args.ranks_file
-
+        weights_file = args.weights_file
+        gmx_file = args.gmx_file
+        perms = args.perms
+        weight_methods = args.weight_methods
+        weight_params = args.weight_params
+        
         # setup logging
         if DEBUG or (verbose > 0):
             level = logging.DEBUG
@@ -142,30 +155,41 @@ USAGE
                             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
         # check command line arguments
-        if not os.path.exists(sample_set_file):
-            parser.error("sample set file '%s' not found" % (sample_set_file))
-        if not os.path.exists(ranks_file):
-            parser.error("ranks file '%s' not found" % (ranks_file))
-
-        name, desc, sample_set = read_sample_set(sample_set_file)
-        samples, weights = read_ranks(ranks_file)
-        
-        print name, desc, sample_set
-        print samples, weights
-        
-        ssea(samples, weights, sample_set)
-        #raise CLIError("include and exclude pattern are equal! Nothing will be processed.")
-        return 0
+        if not os.path.exists(weights_file):
+            parser.error("weights file '%s' not found" % (weights_file))
+        # read weights
+        samples, weights = parse_weights(weights_file)        
+        # read sample sets
+        sample_sets = []
+        if gmx_file:
+            if not os.path.exists(gmx_file):
+                parser.error("gmx file '%s' not found" % (gmx_file))
+            sample_sets.extend(parse_gmx(gmx_file))
+        # check parameters
+        perms = max(1, perms)
+        # check weight method, params
+        fields = weight_methods.split(',')
+        if len(fields) == 1:
+            weight_methods = (fields[0], fields[0])
+        else:
+            weight_methods = fields[:2]
+        # run
+        ssea(samples, weights, sample_sets, 
+             weight_methods=weight_methods,
+             weight_params=weight_params, 
+             perms=perms)            
     except KeyboardInterrupt:
         ### handle keyboard interrupt ###
-        return 0
-    except Exception, e:
-        if DEBUG or TESTRUN:
-            raise(e)
-        indent = len(program_name) * " "
-        logging.error(program_name + ": " + repr(e) + "\n")
-        logging.error(indent + "  for help use --help")
-        return 2
+        pass
+#     except Exception, e:
+#         pass
+#         if DEBUG or TESTRUN:
+#             raise(e)
+#         indent = len(program_name) * " "
+#         logging.error(program_name + ": " + repr(e) + "\n")
+#         logging.error(indent + "  for help use --help")
+#         return 2
+    return 0
 
 if __name__ == "__main__":
     if DEBUG:
