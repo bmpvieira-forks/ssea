@@ -9,49 +9,11 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
-MIN_CONSTANT = 1e-8
-DEFAULT_LOG_BASE = 2.0
-
-def transform_weights(weights, method, params):
-    if method == 'unweighted':
-        return np.ones(len(weights), dtype=np.float)
-    elif method == 'weighted':
-        return np.array(weights, dtype=np.float)
-    elif method == 'log':
-        weights = np.array(weights, dtype=np.float)
-        nzweights = weights[weights > 0]
-        if len(nzweights) == 0:
-            const = MIN_CONSTANT
-        else:
-            const = nzweights.min()
-        if params is None:
-            base = DEFAULT_LOG_BASE
-        else:
-            base = float(params)
-        n = np.log(const + weights)
-        d = np.log(base * np.ones(len(weights),dtype=np.float))
-        return n/d
-
-def rle(vals):
-    '''run length encoder'''
-    lengths, vals = zip(*[(len(list(v)),k) for k,v in groupby(vals)])
-    return lengths, vals
-
-def rld(lengths, vals):
-    '''run length decode'''
-    out = np.zeros(np.sum(lengths), dtype=np.float)    
-    offset = 0
-    for i in xrange(len(lengths)):
-        length = lengths[i]
-        val = vals[i]
-        out[offset:offset+length] = val
-        offset += length
-    return out
+LOG_TRANSFORM_CONSTANT = 1e-3
+LOG_TRANSFORM_BASE = 2.0
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
-    '''
-    copied verbatim from scipy code (scipy.org)
-    '''
+    '''copied verbatim from scipy code (scipy.org)'''
     def _interpolate(a, b, fraction):
         return a + (b - a)*fraction;
     values = np.sort(a, axis=0)
@@ -74,6 +36,35 @@ def quantile(a, frac, limit=(), interpolation_method='fraction'):
                              "'lower' or 'higher'")
     return score
 
+def transform_weights(weights, method, params):
+    if method == 'unweighted':
+        return np.ones(len(weights), dtype=np.float)
+    elif method == 'weighted':
+        return np.array(weights, dtype=np.float)
+    elif method == 'log':
+        weights = np.array(weights, dtype=np.float)
+        nzweights = weights[weights > 0]
+        if len(nzweights) == 0:
+            const = LOG_TRANSFORM_CONSTANT
+        else:
+            const = max(LOG_TRANSFORM_CONSTANT, nzweights.min())
+        return np.log2(const + weights) - np.log2(const)
+
+def rle(vals):
+    '''run length encoder'''
+    lengths, vals = zip(*[(len(list(v)),k) for k,v in groupby(vals)])
+    return lengths, vals
+
+def rld(lengths, vals):
+    '''run length decode'''
+    out = np.zeros(np.sum(lengths), dtype=np.float)    
+    offset = 0
+    for i in xrange(len(lengths)):
+        length = lengths[i]
+        val = vals[i]
+        out[offset:offset+length] = val
+        offset += length
+    return out
 
 class SampleSet(object):    
     def __init__(self, name=None, desc=None, value=None):
@@ -113,7 +104,7 @@ class SampleSetResult(object):
         y = [0]
         y.extend(self.es_arr)
         x = np.arange(len(y))
-        ax0.plot(x, y, lw=2, color='blue')
+        ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
         ax0.axhline(y=0, color='gray')
         ax0.axvline(x=self.es_ind, linestyle='--', color='black')
         # confidence interval
@@ -130,7 +121,8 @@ class SampleSetResult(object):
             upper_bound = np.repeat(es_null_hi, len(x))
             ax0.axhline(y=es_null_mean, lw=2, color='red', ls=':')
             ax0.fill_between(x, lower_bound, upper_bound,
-                             lw=0, facecolor='yellow', alpha=0.5)
+                             lw=0, facecolor='yellow', alpha=0.5,
+                             label='%.2f CI' % (100. * conf_int))
             # here we use the where argument to only fill the region 
             # where the ES is above the confidence interval boundary
             if np.sign(self.es) < 0:
@@ -145,12 +137,12 @@ class SampleSetResult(object):
         ax0.set_title(title)
         # membership in sample set
         ax1 = plt.subplot(gs[1])
-        ax1.bar(np.arange(len(self.es_arr)), membership, 1, color='black', edgecolor='none')
+        ax1.bar(np.arange(len(self.es_arr)), membership, 1, color='black', 
+                edgecolor='none', label='Hits')
         ax1.set_xticks([])
         ax1.set_yticks([])
         ax1.set_xticklabels([])
         ax1.set_yticklabels([])
-        #ax1.set_yticklabels([])
         ax1.set_ylabel('Set')
         # weights
         ax2 = plt.subplot(gs[2])
@@ -159,12 +151,20 @@ class SampleSetResult(object):
         ax2.set_xlabel('Samples')
         ax2.set_ylabel('Weights')
         # draw
-        plt.tight_layout()
-        plt.show()
-        #plt.savefig('grid_figure.pdf')
+        fig.tight_layout()
+        return fig
     
-    def report(self):
-        pass
+    def report(self, samples, weights, membership):
+        lines = []
+        lines.append(['# INDEX', 'SAMPLE', 'RANK', 'WEIGHT', 'RUNNING_ES', 
+                      'CORE_ENRICHMENT'])
+        member_inds = (membership > 0).nonzero()[0]
+        for i,ind in enumerate(member_inds):
+            is_enriched = 'Yes' if (ind < self.es_ind) else 'No'
+            fields = [i, samples[ind], ind+1, weights[ind], 
+                      self.es_arr[ind], is_enriched]
+            lines.append(map(str, fields))
+        return lines
     
     def report_html(self):
         pass
@@ -206,6 +206,7 @@ def _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms):
     es_null = np.zeros(perms, dtype=np.float)
     null_membership = membership.copy()
     for i in xrange(perms):
+        print i
         np.random.shuffle(null_membership)
         es_null[i] = _ssea_kernel(rle_lengths, rle_weights_arr, 
                                   null_membership)[0]
@@ -262,14 +263,18 @@ def ssea(samples, weights, sample_sets,
     rle_weights_arr = np.transpose((rle_weights_miss, rle_weights_hit))
     # process each sample set
     for sample_set in sample_sets:
-        print sample_set.name, sample_set.desc
         # convert sample set to membership vector
         membership = sample_set.get_array(samples)
         # analyze sample set
         res = _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms)
+        fig = res.plot(membership, weights_arr,
+                       title='Enrichment plot: %s' % (sample_set.name))
+        lines = res.report(samples, weights_hit, membership)
+        print sample_set.name, sample_set.desc
         print res.es, res.nes, 'p', res.nominal_p
-        res.plot(membership, weights_arr,
-                 title='Enrichment plot: %s' % (sample_set.name))
+        for line in lines:
+            print '\t'.join(line)
+        fig.savefig('image.png')        
         # save the min/max of the NES and NES_null scores 
         # for computing the FWER
         #nes_min = min(nes, nes_null_neg.min())

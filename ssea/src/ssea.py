@@ -131,7 +131,7 @@ USAGE
                             help="set verbosity level [default: %(default)s]")
         parser.add_argument('-V', '--version', action='version', version=program_version_message)
         parser.add_argument('--weight-methods', dest='weight_methods', 
-                            default='weighted,weighted') 
+                            default='weighted,weighted')
         parser.add_argument('--weight-params', dest='weight_params', 
                             default=None)
         parser.add_argument('--perms', type=int, default=1000)
