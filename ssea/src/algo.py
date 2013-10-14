@@ -83,7 +83,6 @@ class SampleSetResult(object):
         self.es_arr = None
         self.nominal_p = 1.0
         self.nes = 0.0
-        self.es_null_sign = None
         self.es_null_neg = None
         self.es_null_pos = None
 
@@ -92,6 +91,22 @@ class SampleSetResult(object):
             return -self.es_null_neg / self.es_null_neg.mean()
         else:
             return self.es_null_pos / self.es_null_pos.mean()
+
+    def plot_null_distribution(self):
+        num_neg = len(self.es_null_neg)
+        num_pos = len(self.es_null_pos)
+        percent_pos = 100. * float(num_pos) / (num_neg + num_pos)
+        es_null = np.concatenate((-self.es_null_neg[::-1], self.es_null_pos))
+        fig = plt.figure()
+        ax = fig.add_subplot(1,1,1)
+        num_bins = int(round(float(num_neg + num_pos) ** (1./2.)))
+        #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
+        n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='bar')
+        ax.axvline(x=self.es, linestyle='--', color='black')
+        ax.set_title('Random ES distribution')
+        ax.set_ylabel('P(ES)')
+        ax.set_xlabel('ES (Sets with pos scores: %.0f%%)' % (percent_pos))
+        return fig
 
     def plot(self, membership, weights,
              title='Enrichment plot',
@@ -206,7 +221,6 @@ def _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms):
     es_null = np.zeros(perms, dtype=np.float)
     null_membership = membership.copy()
     for i in xrange(perms):
-        print i
         np.random.shuffle(null_membership)
         es_null[i] = _ssea_kernel(rle_lengths, rle_weights_arr, 
                                   null_membership)[0]
@@ -267,14 +281,18 @@ def ssea(samples, weights, sample_sets,
         membership = sample_set.get_array(samples)
         # analyze sample set
         res = _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms)
+        # create report
+        fig = res.plot_null_distribution()    
+        fig.savefig('null_distribution_plot.png')
         fig = res.plot(membership, weights_arr,
                        title='Enrichment plot: %s' % (sample_set.name))
+        fig.savefig('enrichment_plot.png')
         lines = res.report(samples, weights_hit, membership)
         print sample_set.name, sample_set.desc
         print res.es, res.nes, 'p', res.nominal_p
         for line in lines:
             print '\t'.join(line)
-        fig.savefig('image.png')        
+        
         # save the min/max of the NES and NES_null scores 
         # for computing the FWER
         #nes_min = min(nes, nes_null_neg.min())
