@@ -48,13 +48,31 @@ def rld(lengths, vals):
         offset += length
     return out
 
-def rle_group(lengths, origlist):
-    newlist = []
-    i = 0
-    for length in lengths:
-        newlist.append(origlist[i:i+length])
-        i += length
-    return newlist
+def quantile(a, frac, limit=(), interpolation_method='fraction'):
+    '''
+    copied verbatim from scipy code (scipy.org)
+    '''
+    def _interpolate(a, b, fraction):
+        return a + (b - a)*fraction;
+    values = np.sort(a, axis=0)
+    if limit:
+        values = values[(limit[0] <= values) & (values <= limit[1])]
+
+    idx = frac * (values.shape[0] - 1)
+    if (idx % 1 == 0):
+        score = values[idx]
+    else:
+        if interpolation_method == 'fraction':
+            score = _interpolate(values[int(idx)], values[int(idx) + 1],
+                                 idx % 1)
+        elif interpolation_method == 'lower':
+            score = values[np.floor(idx)]
+        elif interpolation_method == 'higher':
+            score = values[np.ceil(idx)]
+        else:
+            raise ValueError("interpolation_method can only be 'fraction', " \
+                             "'lower' or 'higher'")
+    return score
 
 
 class SampleSet(object):    
@@ -67,45 +85,92 @@ class SampleSet(object):
         return np.array([x in self.value for x in samples])
 
 class SampleSetResult(object):
-    pass
+    def __init__(self):
+        self.sample_set = None
+        self.es = 0.0
+        self.es_ind = 0
+        self.es_arr = None
+        self.nominal_p = 1.0
+        self.nes = 0.0
+        self.es_null_sign = None
+        self.es_null_neg = None
+        self.es_null_pos = None
+
+    def get_nes_null(self, sign):
+        if sign < 0:
+            return -self.es_null_neg / self.es_null_neg.mean()
+        else:
+            return self.es_null_pos / self.es_null_pos.mean()
+
+    def plot(self, membership, weights,
+             title='Enrichment plot',
+             plot_conf_int=True, conf_int=0.95):
+        fig = plt.figure()
+        #fig = plt.figure(figsize=(8, 6)) 
+        gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
+        # running enrichment score
+        ax0 = plt.subplot(gs[0])
+        y = [0]
+        y.extend(self.es_arr)
+        x = np.arange(len(y))
+        ax0.plot(x, y, lw=2, color='blue')
+        ax0.axhline(y=0, color='gray')
+        ax0.axvline(x=self.es_ind, linestyle='--', color='black')
+        # confidence interval
+        if plot_conf_int:
+            if np.sign(self.es) < 0:                
+                es_null_sign = -self.es_null_neg[::-1]
+            else:
+                es_null_sign = self.es_null_pos
+            # plot confidence interval band
+            es_null_mean = es_null_sign.mean()
+            es_null_low = quantile(es_null_sign, 1.0-conf_int)
+            es_null_hi = quantile(es_null_sign, conf_int)
+            lower_bound = np.repeat(es_null_low, len(x))
+            upper_bound = np.repeat(es_null_hi, len(x))
+            ax0.axhline(y=es_null_mean, lw=2, color='red', ls=':')
+            ax0.fill_between(x, lower_bound, upper_bound,
+                             lw=0, facecolor='yellow', alpha=0.5)
+            # here we use the where argument to only fill the region 
+            # where the ES is above the confidence interval boundary
+            if np.sign(self.es) < 0:
+                ax0.fill_between(x, y, lower_bound, where=y<lower_bound, 
+                                 lw=0, facecolor='blue', alpha=0.5)
+            else:
+                ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
+                                 lw=0, facecolor='blue', alpha=0.5)
+        ax0.grid(True)
+        ax0.set_xticklabels([])
+        ax0.set_ylabel('Enrichment score (ES)')
+        ax0.set_title(title)
+        # membership in sample set
+        ax1 = plt.subplot(gs[1])
+        ax1.bar(np.arange(len(self.es_arr)), membership, 1, color='black', edgecolor='none')
+        ax1.set_xticks([])
+        ax1.set_yticks([])
+        ax1.set_xticklabels([])
+        ax1.set_yticklabels([])
+        #ax1.set_yticklabels([])
+        ax1.set_ylabel('Set')
+        # weights
+        ax2 = plt.subplot(gs[2])
+        ax2.plot(weights[:,0], color='blue')
+        ax2.plot(weights[:,1], color='red')
+        ax2.set_xlabel('Samples')
+        ax2.set_ylabel('Weights')
+        # draw
+        plt.tight_layout()
+        plt.show()
+        #plt.savefig('grid_figure.pdf')
+    
+    def report(self):
+        pass
+    
+    def report_html(self):
+        pass
 
 class SSEA(object):
     pass
-
-def plot(diff, membership, weights):
-    fig = plt.figure()
-    #fig = plt.figure(figsize=(8, 6)) 
-    gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
-    # running enrichment score
-    ax0 = plt.subplot(gs[0])
-    newdiff = [0]
-    newdiff.extend(diff)
-    ax0.plot(np.arange(len(newdiff)),newdiff)
-    ax0.axhline(y=0, color='gray')
-    #ax0.axvline(x=res.es_ind+1, linestyle='--', color='black')
-    ax0.grid(True)
-    ax0.set_xticklabels([])
-    ax0.set_ylabel('Enrichment score (ES)')
-    # membership in sample set
-    ax1 = plt.subplot(gs[1])
-    ax1.bar(np.arange(len(diff)), membership, 1, color='black', edgecolor='none')
-    ax1.set_xticks([])
-    ax1.set_yticks([])
-    ax1.set_xticklabels([])
-    ax1.set_yticklabels([])
-    #ax1.set_yticklabels([])
-    ax1.set_ylabel('Set')
-    # weights
-    ax2 = plt.subplot(gs[2])
-    ax2.plot(weights[:,0], color='blue')
-    ax2.plot(weights[:,1], color='red')
-    ax2.set_xlabel('Samples')
-    ax2.set_ylabel('Weights')
-    # draw
-    plt.tight_layout()
-    plt.show()
-    #plt.savefig('grid_figure.pdf')
-
 
 def _ssea_kernel(rle_lengths, rle_weights_arr, membership):
     # evaluate the fraction of samples in S "hits" and the fraction of 
@@ -121,9 +186,8 @@ def _ssea_kernel(rle_lengths, rle_weights_arr, membership):
             hitmiss[i,ishit] += rle_weights_arr[i,ishit]
         offset += length
     hitmiss = hitmiss.cumsum(axis=0)
+    # TODO: handle case where one set has all zeros and cumsum is zero
     hitmiss /= hitmiss[-1,:]
-    # TODO: handle case where one set has all zeros
-    # and cumsum is zero    
     # the enrichment score (ES) is the maximum deviation from zero of
     # phit - pmiss. for a randomly distributed S, ES(S) will be relatively
     # small, but if it is concentrated at the top of bottom of the list,
@@ -143,34 +207,22 @@ def _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms):
     null_membership = membership.copy()
     for i in xrange(perms):
         np.random.shuffle(null_membership)
-        es_i = _ssea_kernel(rle_lengths, rle_weights_arr, 
-                            null_membership)[0]
-        es_null[i] = es_i
-        
-    plt.hist(es_null, bins=100, range=(-10,10))
-    plt.show()
+        es_null[i] = _ssea_kernel(rle_lengths, rle_weights_arr, 
+                                  null_membership)[0]
+    # separate the positive and negative null distribution values
+    es_null_neg = np.sort(np.abs(es_null[np.sign(es_null) < 0]))
+    es_null_pos = np.sort(es_null[np.sign(es_null) > 0])
     # estimate nominal p value for S from ES_null by using the
     # positive or negative portion of the distribution corresponding
     # to the sign of the observed ES(S)
-    es_null_sign = np.abs(es_null[np.sign(es_null) == np.sign(es)])
-    es_null_sign.sort()
+    es_null_sign = es_null_neg if np.sign(es) < 0 else es_null_pos  
     nominal_p = 1.0 - (float(es_null_sign.searchsorted(abs(es))) / 
                        len(es_null_sign))
     # adjust for variation in gene set size. Normalize the ES_null
     # and the observed ES(S), separately rescaling the positive and
     # negative scores by dividing by the mean of the ES_null to
     # yield the normalized scores nes_null and nes_score
-    es_null_sign_mean = es_null_sign.mean()
-    nes = es / es_null_sign_mean
-    # now normalized the null scores
-    nes_null_neg = es_null[np.sign(es_null) < 0]
-    nes_null_pos = es_null[np.sign(es_null) > 0]
-    nes_null_neg /= abs(nes_null_neg.mean())
-    nes_null_pos /= nes_null_pos.mean()
-    # save the min/max of the NES and NES_null scores 
-    # for computing the FWER
-    nes_min = min(nes, nes_null_neg.min())
-    nes_max = max(nes, nes_null_pos.max())
+    nes = es / es_null_sign.mean()
     # undo run length encoding to save final result
     es_arr = rld(rle_lengths, es_arr)
     es_ind = sum(rle_lengths[:es_ind+1])
@@ -178,11 +230,12 @@ def _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms):
     res = SampleSetResult()
     res.es = es
     res.es_ind = es_ind
-    res.diff = es_arr
+    res.es_arr = es_arr
     res.nominal_p = nominal_p
     res.nes = nes
-    res.nes_min = nes_min
-    res.nes_max = nes_max
+    res.es_null_sign = es_null_sign
+    res.es_null_neg = es_null_neg
+    res.es_null_pos = es_null_pos
     return res
 
 def ssea(samples, weights, sample_sets, 
@@ -214,8 +267,16 @@ def ssea(samples, weights, sample_sets,
         membership = sample_set.get_array(samples)
         # analyze sample set
         res = _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms)
-        print res.es, res.nes, 'p', res.nominal_p, 'nes min', res.nes_min, 'nes max', res.nes_max        
-        plot(res.diff, membership, weights_arr)
+        print res.es, res.nes, 'p', res.nominal_p
+        res.plot(membership, weights_arr,
+                 title='Enrichment plot: %s' % (sample_set.name))
+        # save the min/max of the NES and NES_null scores 
+        # for computing the FWER
+        #nes_min = min(nes, nes_null_neg.min())
+        #nes_max = max(nes, nes_null_pos.max())
+        #print 'nes min', res.nes_min, 'nes max', res.nes_max        
+        #nes_null_neg = es_null_neg / es_null_neg.mean()
+        #nes_null_pos = es_null_pos / es_null_pos.mean()
 
     
     return
