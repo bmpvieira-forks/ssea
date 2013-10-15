@@ -66,6 +66,19 @@ def rld(lengths, vals):
         offset += length
     return out
 
+def rld2d(lengths, arr2d):
+    '''run length decode for 2d array'''
+    assert len(lengths) == arr2d.shape[0]
+    out = np.zeros((np.sum(lengths),arr2d.shape[1]), dtype=np.float)    
+    offset = 0
+    for i in xrange(len(lengths)):
+        length = lengths[i]
+        vals = arr2d[i,:]
+        for j in xrange(length):
+            out[offset + j,:] = vals
+        offset += length
+    return out
+
 class SampleSet(object):    
     def __init__(self, name=None, desc=None, value=None):
         self.name = name
@@ -80,11 +93,11 @@ class SampleSetResult(object):
         self.sample_set = None
         self.es = 0.0
         self.es_ind = 0
-        self.es_arr = None
+        self.es_run = None
         self.nominal_p = 1.0
         self.nes = 0.0
-        self.es_null_neg = None
-        self.es_null_pos = None
+        self.es_null = None
+        self.es_sign_ind = 0
 
     def get_nes_null(self, sign):
         if sign < 0:
@@ -93,20 +106,33 @@ class SampleSetResult(object):
             return self.es_null_pos / self.es_null_pos.mean()
 
     def plot_null_distribution(self):
-        num_neg = len(self.es_null_neg)
-        num_pos = len(self.es_null_pos)
-        percent_pos = 100. * float(num_pos) / (num_neg + num_pos)
-        es_null = np.concatenate((-self.es_null_neg[::-1], self.es_null_pos))
+        percent_pos = (100. * self.es_sign_ind) / self.es_null.shape[0]
         fig = plt.figure()
         ax = fig.add_subplot(1,1,1)
-        num_bins = int(round(float(num_neg + num_pos) ** (1./2.)))
+        num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
-        n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='bar')
+        n, bins, patches = ax.hist(self.es_null, bins=num_bins, histtype='bar')
         ax.axvline(x=self.es, linestyle='--', color='black')
         ax.set_title('Random ES distribution')
         ax.set_ylabel('P(ES)')
         ax.set_xlabel('ES (Sets with pos scores: %.0f%%)' % (percent_pos))
-        return fig
+        return fig 
+#         num_neg = len(self.es_null_neg)
+#         num_pos = len(self.es_null_pos)
+#         percent_pos = 100. * float(num_pos) / (num_neg + num_pos)
+#         es_null = np.concatenate((-self.es_null_neg[::-1], self.es_null_pos))
+#         fig = plt.figure()
+#         ax = fig.add_subplot(1,1,1)
+#         num_bins = int(round(float(num_neg + num_pos) ** (1./2.)))
+#         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
+#         n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='bar')
+#         ax.axvline(x=self.es, linestyle='--', color='black')
+#         ax.set_title('Random ES distribution')
+#         ax.set_ylabel('P(ES)')
+#         ax.set_xlabel('ES (Sets with pos scores: %.0f%%)' % (percent_pos))
+#         return fig
+
+    
 
     def plot(self, membership, weights,
              title='Enrichment plot',
@@ -253,6 +279,99 @@ def _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms):
     res.es_null_pos = es_null_pos
     return res
 
+def _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d):
+    # evaluate the fraction of samples in S "hits" and the fraction of 
+    # samples not in S "misses" present up to a given position i in L
+    phit = np.zeros((len(rle_lengths), membership2d.shape[1]), dtype=np.float)
+    pmiss = np.zeros((len(rle_lengths), membership2d.shape[1]), dtype=np.float)
+    offset = 0
+    for i in xrange(len(rle_lengths)):
+        # run length encoding ensures that tied weights get added to same 
+        # index of the hit/miss array
+        length = rle_lengths[i]
+        wt_miss, wt_hit = rle_weights_arr[i]
+        # count hits and misses at this index (all samples have identical 
+        # weight)
+        counts_hit = membership2d[offset:offset+length,:].sum(axis=0)
+        counts_miss = length - counts_hit
+        # update pmiss/phit vectors
+        pmiss[i] = wt_miss * counts_miss
+        phit[i] = wt_hit * counts_hit        
+        offset += length
+    pmiss = pmiss.cumsum(axis=0)
+    phit = phit.cumsum(axis=0)
+    # handle cases where a sample set has a cumulative sum of zero
+    norm_miss = np.where(pmiss[-1,:] > 0, pmiss[-1,:], 1.0)
+    norm_hit = np.where(phit[-1,:] > 0, phit[-1,:], 1.0)
+    # normalize cumulative sums
+    pmiss /= norm_miss
+    phit /= norm_hit
+    # the enrichment score (ES) is the maximum deviation from zero of
+    # phit - pmiss. for a randomly distributed S, ES(S) will be relatively
+    # small, but if it is concentrated at the top of bottom of the list,
+    # or otherwise nonrandomly distributed, then ES(S) will be 
+    # correspondingly high
+    es_runs = phit - pmiss
+    es_inds = np.abs(es_runs).argmax(axis=0)
+    es_vals = np.choose(es_inds, es_runs)
+    return es_vals, es_inds, es_runs
+
+def _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms):
+    # determine enrichment score (ES)
+    es_vals, rle_es_inds, rle_es_runs = \
+        _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d)
+    # permute samples and determine null distribution of ES
+    es_null = np.zeros((perms,membership2d.shape[1]), dtype=np.float)
+    null_membership = membership2d.copy()
+    for i in xrange(perms):
+        np.random.shuffle(null_membership)
+        es_null[i] = _ssea_kernel2d(rle_lengths, rle_weights_arr, 
+                                    null_membership)[0]
+    # sort the null enrichment scores
+    es_null = np.sort(es_null, axis=0)
+    # find the first indexes where es scores are positive values
+    # in the arrays of null enrichment scores
+    es_sign_inds = np.argmin(es_null < 0, axis=0)
+    # undo run length encoding before saving results
+    es_runs = rld2d(rle_lengths, rle_es_runs)
+    # process each sample set
+    results = []
+    for i in xrange(membership2d.shape[1]):
+        es = es_vals[i]
+        es_run = es_runs[:,i]
+        es_sign_ind = es_sign_inds[i]
+        # undo run length encoding of core enrichment index
+        es_ind = sum(rle_lengths[:rle_es_inds[i]+1])
+        # estimate nominal p value for S from ES_null by using the
+        # positive or negative portion of the distribution corresponding
+        # to the sign of the observed ES(S)
+        if np.sign(es) < 0:
+            es_null_sign = es_null[:es_sign_ind,i]
+        else:
+            es_null_sign = es_null[es_sign_ind:,i]
+        nominal_p = 1.0 - (es_null_sign.searchsorted(abs(es)) / 
+                           float(len(es_null_sign)))
+        # adjust for variation in gene set size. Normalize the ES_null
+        # and the observed ES(S), separately rescaling the positive and
+        # negative scores by dividing by the mean of the ES_null to
+        # yield the normalized scores nes_null and nes_score
+        nes = es / es_null_sign.mean()
+        # save result
+        res = SampleSetResult()
+        res.es = es
+        res.es_ind = es_ind
+        res.es_run = es_run
+        res.nominal_p = nominal_p
+        res.nes = nes
+        res.es_sign_ind = es_sign_ind
+        res.es_null = es_null[:,i]
+        results.append(res)
+    # compute fdr
+
+
+
+    return results
+
 def ssea(samples, weights, sample_sets, 
          weight_methods=('unweighted', 'unweighted'), 
          weight_params=None, 
@@ -275,6 +394,15 @@ def ssea(samples, weights, sample_sets,
     rle_weights_hit = transform_weights(rle_weights, weight_methods[1], 
                                         weight_params)
     rle_weights_arr = np.transpose((rle_weights_miss, rle_weights_hit))
+    # convert sample sets to membership vectors
+    membership2d = np.zeros((len(samples), len(sample_sets)), dtype=np.bool)
+    for j,sample_set in enumerate(sample_sets):
+        membership2d[:,j] = sample_set.get_array(samples)
+
+    res2d = _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms)
+
+    return
+
     # process each sample set
     for sample_set in sample_sets:
         # convert sample set to membership vector

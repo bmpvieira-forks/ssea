@@ -66,8 +66,8 @@ def parse_gmx(filename):
         if not line:
             continue
         fields = line.split('\t')
-        if len(fields) != len(names):
-            raise ParserError("Incorrect number of fields in line %d" % (lineno))
+        #if len(fields) != len(names):
+        #    raise ParserError("Incorrect number of fields in line %d" % (lineno))
         for i,f in enumerate(fields):
             sample_sets[i].value.add(f)
         lineno += 1
