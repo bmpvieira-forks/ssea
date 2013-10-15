@@ -95,6 +95,8 @@ class SampleSetResult(object):
         self.es_ind = 0
         self.es_run = None
         self.nominal_p = 1.0
+        self.fdr = 1.0
+        self.fwer = 1.0
         self.nes = 0.0
         self.es_null = None
         self.es_sign_ind = 0
@@ -106,7 +108,7 @@ class SampleSetResult(object):
             return self.es_null_pos / self.es_null_pos.mean()
 
     def plot_null_distribution(self):
-        percent_pos = (100. * self.es_sign_ind) / self.es_null.shape[0]
+        percent_neg = (100. * self.es_sign_ind) / self.es_null.shape[0]
         fig = plt.figure()
         ax = fig.add_subplot(1,1,1)
         num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
@@ -115,24 +117,8 @@ class SampleSetResult(object):
         ax.axvline(x=self.es, linestyle='--', color='black')
         ax.set_title('Random ES distribution')
         ax.set_ylabel('P(ES)')
-        ax.set_xlabel('ES (Sets with pos scores: %.0f%%)' % (percent_pos))
-        return fig 
-#         num_neg = len(self.es_null_neg)
-#         num_pos = len(self.es_null_pos)
-#         percent_pos = 100. * float(num_pos) / (num_neg + num_pos)
-#         es_null = np.concatenate((-self.es_null_neg[::-1], self.es_null_pos))
-#         fig = plt.figure()
-#         ax = fig.add_subplot(1,1,1)
-#         num_bins = int(round(float(num_neg + num_pos) ** (1./2.)))
-#         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
-#         n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='bar')
-#         ax.axvline(x=self.es, linestyle='--', color='black')
-#         ax.set_title('Random ES distribution')
-#         ax.set_ylabel('P(ES)')
-#         ax.set_xlabel('ES (Sets with pos scores: %.0f%%)' % (percent_pos))
-#         return fig
-
-    
+        ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % (percent_neg))
+        return fig
 
     def plot(self, membership, weights,
              title='Enrichment plot',
@@ -143,7 +129,7 @@ class SampleSetResult(object):
         # running enrichment score
         ax0 = plt.subplot(gs[0])
         y = [0]
-        y.extend(self.es_arr)
+        y.extend(self.es_run)
         x = np.arange(len(y))
         ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
         ax0.axhline(y=0, color='gray')
@@ -151,9 +137,9 @@ class SampleSetResult(object):
         # confidence interval
         if plot_conf_int:
             if np.sign(self.es) < 0:                
-                es_null_sign = -self.es_null_neg[::-1]
+                es_null_sign = self.es_null[:self.es_sign_ind]
             else:
-                es_null_sign = self.es_null_pos
+                es_null_sign = self.es_null[self.es_sign_ind:]
             # plot confidence interval band
             es_null_mean = es_null_sign.mean()
             es_null_low = quantile(es_null_sign, 1.0-conf_int)
@@ -178,8 +164,9 @@ class SampleSetResult(object):
         ax0.set_title(title)
         # membership in sample set
         ax1 = plt.subplot(gs[1])
-        ax1.bar(np.arange(len(self.es_arr)), membership, 1, color='black', 
+        ax1.bar(np.arange(len(membership)), membership, 1, color='black', 
                 edgecolor='none', label='Hits')
+        ax1.set_xlim((0, len(self.es_run)))
         ax1.set_xticks([])
         ax1.set_yticks([])
         ax1.set_xticklabels([])
@@ -203,7 +190,7 @@ class SampleSetResult(object):
         for i,ind in enumerate(member_inds):
             is_enriched = 'Yes' if (ind < self.es_ind) else 'No'
             fields = [i, samples[ind], ind+1, weights[ind], 
-                      self.es_arr[ind], is_enriched]
+                      self.es_run[ind], is_enriched]
             lines.append(map(str, fields))
         return lines
     
@@ -334,7 +321,14 @@ def _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms):
     es_sign_inds = np.argmin(es_null < 0, axis=0)
     # undo run length encoding before saving results
     es_runs = rld2d(rle_lengths, rle_es_runs)
-    # process each sample set
+    # process each sample set and compute normalized enrichment
+    # scores and stats
+    nes_null_min = []
+    nes_null_max = []
+    nes_null_neg = []
+    nes_null_pos = []
+    nes_obs_neg = []
+    nes_obs_pos = []
     results = []
     for i in xrange(membership2d.shape[1]):
         es = es_vals[i]
@@ -347,15 +341,28 @@ def _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms):
         # to the sign of the observed ES(S)
         if np.sign(es) < 0:
             es_null_sign = es_null[:es_sign_ind,i]
+            nominal_rank = es_null_sign.searchsorted(es)
         else:
             es_null_sign = es_null[es_sign_ind:,i]
-        nominal_p = 1.0 - (es_null_sign.searchsorted(abs(es)) / 
-                           float(len(es_null_sign)))
+            nominal_rank = (len(es_null_sign) -
+                            es_null_sign.searchsorted(es))
+        nominal_p = nominal_rank / float(len(es_null_sign))
         # adjust for variation in gene set size. Normalize the ES_null
         # and the observed ES(S), separately rescaling the positive and
         # negative scores by dividing by the mean of the ES_null to
         # yield the normalized scores nes_null and nes_score
-        nes = es / es_null_sign.mean()
+        es_null_sign_mean = es_null_sign.mean()
+        nes = es / abs(es_null_sign_mean)
+        nes_null_sign = es_null_sign / abs(es_null_sign_mean)
+        # save normalized enrichment scores for computing FDR and FWER
+        if np.sign(es) < 0:
+            nes_null_min.append(nes_null_sign[0])
+            nes_null_neg.extend(nes_null_sign)
+            nes_obs_neg.append(nes)
+        else:
+            nes_null_max.append(nes_null_sign[-1])
+            nes_null_pos.extend(nes_null_sign)
+            nes_obs_pos.append(nes)
         # save result
         res = SampleSetResult()
         res.es = es
@@ -366,10 +373,36 @@ def _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms):
         res.es_sign_ind = es_sign_ind
         res.es_null = es_null[:,i]
         results.append(res)
-    # compute fdr
-
-
-
+    # adjust for multiple hypothesis testing (FDR and FWER)
+    # control the ratio of false positives to the total number of 
+    # gene sets attaining a fixed level of significance separately for 
+    # positive (negative) NES(S) and NES_null.
+    nes_null_neg = np.sort(nes_null_neg)
+    nes_null_pos = np.sort(nes_null_pos)
+    nes_null_min.sort()
+    nes_null_max.sort()
+    nes_obs_neg.sort()
+    nes_obs_pos.sort()
+    for i,res in enumerate(results):
+        # create a histogram of all NES_null. Use this null
+        # distribution to compute an FDR q value, for a given 
+        # NES(S) = NES* >= 0, the FDR is the ratio of the percentage of 
+        # all permutations NES_null >= 0, whose NES_null >= NES*, 
+        # divided by the percentage of observed S with NES(S) >= 0, 
+        # whose NES(S) >= NES*, and similarly for NES(S) = NES* <= 0.
+        # Also, compute the familywise error by creating a histogram of the 
+        # maximum NES_null over all S by using the positive or negative 
+        # values corresponding to the sign of the observed NES(S). This 
+        # null distribution is then used to compute an FWER p value.
+        nes = res.nes
+        if np.sign(nes) < 0:
+            n = (nes_null_neg <= nes).sum() / float(len(nes_null_neg))
+            d = (nes_obs_neg <= nes).sum() / float(len(nes_obs_neg))
+        else:
+            n = (nes_null_pos >= nes).sum() / float(len(nes_null_pos))
+            d = (nes_obs_pos >= nes).sum() / float(len(nes_obs_pos))
+        res.fdr = n / d
+        res.fwer = n
     return results
 
 def ssea(samples, weights, sample_sets, 
@@ -399,7 +432,25 @@ def ssea(samples, weights, sample_sets,
     for j,sample_set in enumerate(sample_sets):
         membership2d[:,j] = sample_set.get_array(samples)
 
-    res2d = _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms)
+    results = _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms)
+
+    for i,res in enumerate(results):
+        sample_set = sample_sets[i]
+        # create report
+        #fig = res.plot_null_distribution()
+        #plt.show()
+        #plt.close()    
+        #fig.savefig('null_distribution_plot.png')
+        fig = res.plot(membership2d[:,i], weights_arr,
+                       title='Enrichment plot: %s' % (sample_set.name))
+        #fig.savefig('enrichment_plot.png')
+        plt.show()
+        plt.close()
+        #lines = res.report(samples, weights_hit, membership)
+        print sample_set.name, sample_set.desc
+        print res.es, res.nes, 'p', res.nominal_p, 'fdr', res.fdr, 'fwer', res.fwer
+        #for line in lines:
+        #    print '\t'.join(line)
 
     return
 
@@ -417,7 +468,7 @@ def ssea(samples, weights, sample_sets,
         fig.savefig('enrichment_plot.png')
         lines = res.report(samples, weights_hit, membership)
         print sample_set.name, sample_set.desc
-        print res.es, res.nes, 'p', res.nominal_p
+        print res.es, res.nes, 'p', res.nominal_p, 'fdr', res.fdr, 'fwer', res.fwer
         for line in lines:
             print '\t'.join(line)
         
