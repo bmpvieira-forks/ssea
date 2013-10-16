@@ -11,6 +11,12 @@ import matplotlib.gridspec as gridspec
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
 LOG_TRANSFORM_CONSTANT = 1e-3
 LOG_TRANSFORM_BASE = 2.0
+NUM_HISTOGRAM_BINS = 100000
+HISTOGRAM_LIMIT = 10.0
+HISTOGRAM_BINS_NEG = np.linspace(-HISTOGRAM_LIMIT,0., 
+                                 num=NUM_HISTOGRAM_BINS+1)
+HISTOGRAM_BINS_POS = np.linspace(0.,HISTOGRAM_LIMIT, 
+                                 num=NUM_HISTOGRAM_BINS+1)
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
@@ -92,23 +98,17 @@ class SampleSetResult(object):
     def __init__(self):
         self.sample_set = None
         self.es = 0.0
-        self.es_ind = 0
+        self.nes = 0.0
+        self.es_run_ind = 0
         self.es_run = None
-        self.nominal_p = 1.0
+        self.p = 1.0
         self.fdr = 1.0
         self.fwer = 1.0
-        self.nes = 0.0
         self.es_null = None
-        self.es_sign_ind = 0
-
-    def get_nes_null(self, sign):
-        if sign < 0:
-            return -self.es_null_neg / self.es_null_neg.mean()
-        else:
-            return self.es_null_pos / self.es_null_pos.mean()
 
     def plot_null_distribution(self):
-        percent_neg = (100. * self.es_sign_ind) / self.es_null.shape[0]
+        percent_neg = (100. * (self.es_null < 0).sum() / 
+                       self.es_null.shape[0])
         fig = plt.figure()
         ax = fig.add_subplot(1,1,1)
         num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
@@ -133,13 +133,13 @@ class SampleSetResult(object):
         x = np.arange(len(y))
         ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
         ax0.axhline(y=0, color='gray')
-        ax0.axvline(x=self.es_ind, linestyle='--', color='black')
+        ax0.axvline(x=self.es_run_ind, lw=2, linestyle='--', color='black')
         # confidence interval
         if plot_conf_int:
-            if np.sign(self.es) < 0:                
-                es_null_sign = self.es_null[:self.es_sign_ind]
+            if np.sign(self.es) < 0:
+                es_null_sign = self.es_null[self.es_null < 0]                
             else:
-                es_null_sign = self.es_null[self.es_sign_ind:]
+                es_null_sign = self.es_null[self.es_null >= 0]                
             # plot confidence interval band
             es_null_mean = es_null_sign.mean()
             es_null_low = quantile(es_null_sign, 1.0-conf_int)
@@ -188,7 +188,7 @@ class SampleSetResult(object):
                       'CORE_ENRICHMENT'])
         member_inds = (membership > 0).nonzero()[0]
         for i,ind in enumerate(member_inds):
-            is_enriched = 'Yes' if (ind < self.es_ind) else 'No'
+            is_enriched = 'Yes' if (ind < self.es_run_ind) else 'No'
             fields = [i, samples[ind], ind+1, weights[ind], 
                       self.es_run[ind], is_enriched]
             lines.append(map(str, fields))
@@ -196,75 +196,6 @@ class SampleSetResult(object):
     
     def report_html(self):
         pass
-
-class SSEA(object):
-    pass
-
-def _ssea_kernel(rle_lengths, rle_weights_arr, membership):
-    # evaluate the fraction of samples in S "hits" and the fraction of 
-    # samples not in S "misses" present up to a given position i in L
-    hitmiss = np.zeros((len(rle_lengths),2), dtype=np.float)
-    offset = 0
-    for i in xrange(len(rle_lengths)):
-        # run length encoding and second level of looping ensures that
-        # tied weights get added to same index of the hit/miss array
-        length = rle_lengths[i]
-        for j in xrange(length):
-            ishit = membership[offset + j]
-            hitmiss[i,ishit] += rle_weights_arr[i,ishit]
-        offset += length
-    hitmiss = hitmiss.cumsum(axis=0)
-    # TODO: handle case where one set has all zeros and cumsum is zero
-    hitmiss /= hitmiss[-1,:]
-    # the enrichment score (ES) is the maximum deviation from zero of
-    # phit - pmiss. for a randomly distributed S, ES(S) will be relatively
-    # small, but if it is concentrated at the top of bottom of the list,
-    # or otherwise nonrandomly distributed, then ES(S) will be 
-    # correspondingly high
-    diff = hitmiss[:,1] - hitmiss[:,0]
-    es_ind = np.abs(diff).argmax()
-    es = diff[es_ind]
-    return es, es_ind, diff
-
-def _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms):
-    # determine enrichment score (ES)
-    es, es_ind, es_arr = _ssea_kernel(rle_lengths, rle_weights_arr, 
-                                      membership)
-    # permute samples and determine ES_null
-    es_null = np.zeros(perms, dtype=np.float)
-    null_membership = membership.copy()
-    for i in xrange(perms):
-        np.random.shuffle(null_membership)
-        es_null[i] = _ssea_kernel(rle_lengths, rle_weights_arr, 
-                                  null_membership)[0]
-    # separate the positive and negative null distribution values
-    es_null_neg = np.sort(np.abs(es_null[np.sign(es_null) < 0]))
-    es_null_pos = np.sort(es_null[np.sign(es_null) > 0])
-    # estimate nominal p value for S from ES_null by using the
-    # positive or negative portion of the distribution corresponding
-    # to the sign of the observed ES(S)
-    es_null_sign = es_null_neg if np.sign(es) < 0 else es_null_pos  
-    nominal_p = 1.0 - (float(es_null_sign.searchsorted(abs(es))) / 
-                       len(es_null_sign))
-    # adjust for variation in gene set size. Normalize the ES_null
-    # and the observed ES(S), separately rescaling the positive and
-    # negative scores by dividing by the mean of the ES_null to
-    # yield the normalized scores nes_null and nes_score
-    nes = es / es_null_sign.mean()
-    # undo run length encoding to save final result
-    es_arr = rld(rle_lengths, es_arr)
-    es_ind = sum(rle_lengths[:es_ind+1])
-    # save result
-    res = SampleSetResult()
-    res.es = es
-    res.es_ind = es_ind
-    res.es_arr = es_arr
-    res.nominal_p = nominal_p
-    res.nes = nes
-    res.es_null_sign = es_null_sign
-    res.es_null_neg = es_null_neg
-    res.es_null_pos = es_null_pos
-    return res
 
 def _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d):
     # evaluate the fraction of samples in S "hits" and the fraction of 
@@ -299,111 +230,10 @@ def _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d):
     # or otherwise nonrandomly distributed, then ES(S) will be 
     # correspondingly high
     es_runs = phit - pmiss
-    es_inds = np.abs(es_runs).argmax(axis=0)
-    es_vals = np.choose(es_inds, es_runs)
-    return es_vals, es_inds, es_runs
-
-def _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms):
-    # determine enrichment score (ES)
-    es_vals, rle_es_inds, rle_es_runs = \
-        _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d)
-    # permute samples and determine null distribution of ES
-    es_null = np.zeros((perms,membership2d.shape[1]), dtype=np.float)
-    null_membership = membership2d.copy()
-    for i in xrange(perms):
-        np.random.shuffle(null_membership)
-        es_null[i] = _ssea_kernel2d(rle_lengths, rle_weights_arr, 
-                                    null_membership)[0]
-    # sort the null enrichment scores
-    es_null = np.sort(es_null, axis=0)
-    # find the first indexes where es scores are positive values
-    # in the arrays of null enrichment scores
-    es_sign_inds = np.argmin(es_null < 0, axis=0)
-    # undo run length encoding before saving results
-    es_runs = rld2d(rle_lengths, rle_es_runs)
-    # process each sample set and compute normalized enrichment
-    # scores and stats
-    nes_null_min = []
-    nes_null_max = []
-    nes_null_neg = []
-    nes_null_pos = []
-    nes_obs_neg = []
-    nes_obs_pos = []
-    results = []
-    for i in xrange(membership2d.shape[1]):
-        es = es_vals[i]
-        es_run = es_runs[:,i]
-        es_sign_ind = es_sign_inds[i]
-        # undo run length encoding of core enrichment index
-        es_ind = sum(rle_lengths[:rle_es_inds[i]+1])
-        # estimate nominal p value for S from ES_null by using the
-        # positive or negative portion of the distribution corresponding
-        # to the sign of the observed ES(S)
-        if np.sign(es) < 0:
-            es_null_sign = es_null[:es_sign_ind,i]
-            nominal_rank = es_null_sign.searchsorted(es)
-        else:
-            es_null_sign = es_null[es_sign_ind:,i]
-            nominal_rank = (len(es_null_sign) -
-                            es_null_sign.searchsorted(es))
-        nominal_p = nominal_rank / float(len(es_null_sign))
-        # adjust for variation in gene set size. Normalize the ES_null
-        # and the observed ES(S), separately rescaling the positive and
-        # negative scores by dividing by the mean of the ES_null to
-        # yield the normalized scores nes_null and nes_score
-        es_null_sign_mean = es_null_sign.mean()
-        nes = es / abs(es_null_sign_mean)
-        nes_null_sign = es_null_sign / abs(es_null_sign_mean)
-        # save normalized enrichment scores for computing FDR and FWER
-        if np.sign(es) < 0:
-            nes_null_min.append(nes_null_sign[0])
-            nes_null_neg.extend(nes_null_sign)
-            nes_obs_neg.append(nes)
-        else:
-            nes_null_max.append(nes_null_sign[-1])
-            nes_null_pos.extend(nes_null_sign)
-            nes_obs_pos.append(nes)
-        # save result
-        res = SampleSetResult()
-        res.es = es
-        res.es_ind = es_ind
-        res.es_run = es_run
-        res.nominal_p = nominal_p
-        res.nes = nes
-        res.es_sign_ind = es_sign_ind
-        res.es_null = es_null[:,i]
-        results.append(res)
-    # adjust for multiple hypothesis testing (FDR and FWER)
-    # control the ratio of false positives to the total number of 
-    # gene sets attaining a fixed level of significance separately for 
-    # positive (negative) NES(S) and NES_null.
-    nes_null_neg = np.sort(nes_null_neg)
-    nes_null_pos = np.sort(nes_null_pos)
-    nes_null_min.sort()
-    nes_null_max.sort()
-    nes_obs_neg.sort()
-    nes_obs_pos.sort()
-    for i,res in enumerate(results):
-        # create a histogram of all NES_null. Use this null
-        # distribution to compute an FDR q value, for a given 
-        # NES(S) = NES* >= 0, the FDR is the ratio of the percentage of 
-        # all permutations NES_null >= 0, whose NES_null >= NES*, 
-        # divided by the percentage of observed S with NES(S) >= 0, 
-        # whose NES(S) >= NES*, and similarly for NES(S) = NES* <= 0.
-        # Also, compute the familywise error by creating a histogram of the 
-        # maximum NES_null over all S by using the positive or negative 
-        # values corresponding to the sign of the observed NES(S). This 
-        # null distribution is then used to compute an FWER p value.
-        nes = res.nes
-        if np.sign(nes) < 0:
-            n = (nes_null_neg <= nes).sum() / float(len(nes_null_neg))
-            d = (nes_obs_neg <= nes).sum() / float(len(nes_obs_neg))
-        else:
-            n = (nes_null_pos >= nes).sum() / float(len(nes_null_pos))
-            d = (nes_obs_pos >= nes).sum() / float(len(nes_obs_pos))
-        res.fdr = n / d
-        res.fwer = n
-    return results
+    es_run_inds = np.abs(es_runs).argmax(axis=0)
+    es_vals = np.array([es_runs[x,j] for x,j in zip(es_run_inds,range(len(rle_lengths)))])
+    #es_vals = np.choose(es_run_inds, es_runs)
+    return es_vals, es_run_inds, es_runs
 
 def ssea(samples, weights, sample_sets, 
          weight_methods=('unweighted', 'unweighted'), 
@@ -431,55 +261,105 @@ def ssea(samples, weights, sample_sets,
     membership2d = np.zeros((len(samples), len(sample_sets)), dtype=np.bool)
     for j,sample_set in enumerate(sample_sets):
         membership2d[:,j] = sample_set.get_array(samples)
-
-    results = _ssea_2d(rle_lengths, rle_weights_arr, membership2d, perms)
-
-    for i,res in enumerate(results):
-        sample_set = sample_sets[i]
-        # create report
-        #fig = res.plot_null_distribution()
-        #plt.show()
-        #plt.close()    
+    # determine enrichment score (ES)
+    es_vals, rle_es_inds, rle_es_runs = \
+        _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d)
+    # permute samples and determine null distribution of ES
+    es_null = np.zeros((perms,membership2d.shape[1]), dtype=np.float)
+    null_membership = membership2d.copy()
+    for i in xrange(perms):
+        np.random.shuffle(null_membership)
+        es_null[i] = _ssea_kernel2d(rle_lengths, rle_weights_arr, 
+                                    null_membership)[0]
+    # decode run length encoding
+    es_run_inds = [sum(rle_lengths[:x+1]) for x in rle_es_inds]
+    es_runs = rld2d(rle_lengths, rle_es_runs)    
+    # separate the positive and negative sides of the null distribution
+    # based on the observed enrichment scores
+    es_neg_inds = (es_vals < 0).nonzero()[0]
+    es_pos_inds = (es_vals >= 0).nonzero()[0]
+    es_null_neg = np.ma.masked_greater_equal(es_null[:,es_neg_inds], 0)
+    es_null_neg_means = es_null_neg.mean(axis=0)
+    es_null_pos = np.ma.masked_less(es_null[:,es_pos_inds], 0)
+    es_null_pos_means = es_null_pos.mean(axis=0)    
+    # Adjust for variation in gene set size. Normalize ES(S,null)
+    # and the observed ES(S), separately rescaling the positive and
+    # negative scores by dividing by the mean of the ES(S,null) to
+    # yield normalized scores NES(S,null)
+    nes_null_neg = es_null_neg / np.fabs(es_null_neg_means)
+    nes_null_pos = es_null_pos / np.fabs(es_null_pos_means)
+    nes_null_neg_count = nes_null_neg.count()
+    nes_null_pos_count = nes_null_neg.count()
+    # To compute FWER create a histogram of the maximum NES(S,null) 
+    # over all S for each of the permutations by using the positive 
+    # or negative values corresponding to the sign of the observed NES(S). 
+    nes_null_min = nes_null_neg.min(axis=1).compressed()
+    nes_null_max = nes_null_pos.max(axis=1).compressed()
+    # Normalize the observed ES(S) by rescaling by the mean of
+    # the ES(S,null) separately for positive and negative ES(S)
+    nes_obs_neg = es_vals[es_neg_inds] / np.fabs(es_null_neg_means) 
+    nes_obs_pos = es_vals[es_pos_inds] / np.fabs(es_null_pos_means) 
+    nes_vals = np.ones(membership2d.shape[1], dtype=np.float) 
+    nes_vals[es_neg_inds] = nes_obs_neg
+    nes_vals[es_pos_inds] = nes_obs_pos
+    # estimate nominal p value for S from ES(S,null) by using the
+    # positive or negative portion of the distribution corresponding
+    # to the sign of the observed ES(S)
+    pneg = (es_null_neg <= es_vals[es_neg_inds]).sum(axis=0)
+    pneg = pneg / (es_null_neg.count(axis=0).astype(float))
+    ppos = (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
+    ppos = ppos / (es_null_pos.count(axis=0).astype(np.float))
+    pvals = np.ones(membership2d.shape[1], dtype=np.float) 
+    pvals[es_neg_inds] = pneg
+    pvals[es_pos_inds] = ppos
+    # Control for multiple hypothesis testing and summarize results
+    results = []
+    for j in xrange(membership2d.shape[1]):
+        # For a given NES(S) = NES* >= 0, the FDR is the ratio of the 
+        # percentage of all permutations NES(S,null) >= 0, whose 
+        # NES(S,null) >= NES*, divided by the percentage of observed S with 
+        # NES(S) >= 0, whose NES(S) >= NES*, and similarly for 
+        # NES(S) = NES* <= 0.
+        # Also, compute FWER p values by finding the percentage 
+        # of NES_max(S,null) >= NES*, and similarly for 
+        # NES_min(S,null) <= NES* for positive and negative NES*, 
+        # respectively 
+        nes = nes_vals[j]
+        if np.sign(es_vals[j]) < 0:
+            n = (nes_null_neg <= nes).sum() / float(nes_null_neg_count)
+            d = (nes_obs_neg <= nes).sum() / float(len(nes_obs_neg))
+            fwer = (nes_null_min <= nes).sum() / float(len(nes_null_min))
+        else:
+            n = (nes_null_pos >= nes).sum() / float(nes_null_pos_count)
+            d = (nes_obs_pos >= nes).sum() / float(len(nes_obs_pos))
+            fwer = (nes_null_max >= nes).sum() / float(len(nes_null_max))
+        fdr = n / d
+        # create result object
+        res = SampleSetResult()
+        res.sample_set = sample_sets[j]
+        res.es = es_vals[j]
+        res.nes = nes_vals[j]
+        res.es_run_ind = es_run_inds[j]
+        res.es_run = es_runs[:,j]
+        res.p = pvals[j]
+        res.fdr = fdr
+        res.fwer = fwer
+        res.es_null = es_null[:,j]
+        results.append(res)
+        # create plots and reports
+        fig = res.plot_null_distribution()
+        plt.show()
+        plt.close()    
         #fig.savefig('null_distribution_plot.png')
-        fig = res.plot(membership2d[:,i], weights_arr,
+        fig = res.plot(membership2d[:,j], weights_arr,
                        title='Enrichment plot: %s' % (sample_set.name))
         #fig.savefig('enrichment_plot.png')
         plt.show()
         plt.close()
+        print res.sample_set.name, res.sample_set.desc
+        print res.es, res.nes, 'p', res.p, 'fdr', res.fdr, 'fwer', res.fwer
         #lines = res.report(samples, weights_hit, membership)
-        print sample_set.name, sample_set.desc
-        print res.es, res.nes, 'p', res.nominal_p, 'fdr', res.fdr, 'fwer', res.fwer
         #for line in lines:
         #    print '\t'.join(line)
 
     return
-
-    # process each sample set
-    for sample_set in sample_sets:
-        # convert sample set to membership vector
-        membership = sample_set.get_array(samples)
-        # analyze sample set
-        res = _ssea_sample_set(rle_lengths, rle_weights_arr, membership, perms)
-        # create report
-        fig = res.plot_null_distribution()    
-        fig.savefig('null_distribution_plot.png')
-        fig = res.plot(membership, weights_arr,
-                       title='Enrichment plot: %s' % (sample_set.name))
-        fig.savefig('enrichment_plot.png')
-        lines = res.report(samples, weights_hit, membership)
-        print sample_set.name, sample_set.desc
-        print res.es, res.nes, 'p', res.nominal_p, 'fdr', res.fdr, 'fwer', res.fwer
-        for line in lines:
-            print '\t'.join(line)
-        
-        # save the min/max of the NES and NES_null scores 
-        # for computing the FWER
-        #nes_min = min(nes, nes_null_neg.min())
-        #nes_max = max(nes, nes_null_pos.max())
-        #print 'nes min', res.nes_min, 'nes max', res.nes_max        
-        #nes_null_neg = es_null_neg / es_null_neg.mean()
-        #nes_null_pos = es_null_pos / es_null_pos.mean()
-
-    
-    return
-
