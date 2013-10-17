@@ -177,7 +177,25 @@ USAGE
         results = ssea(samples, weights, sample_sets, 
                        weight_methods=weight_methods,
                        weight_params=weight_params, 
-                       perms=perms)            
+                       perms=perms)
+        for res in results:
+            # create plots and reports
+            #fig = res.plot_null_distribution()
+            #plt.show()
+            #plt.close()    
+            #fig.savefig('null_distribution_plot.png')
+            fig = res.plot()
+            #fig.savefig('enrichment_plot.png')
+            import matplotlib.pyplot as plt
+            plt.show()
+            plt.close()
+            #print res.sample_set.name, res.sample_set.desc
+            #print res.es, res.nes, 'p', res.p, 'fdr', res.fdr, 'fwer', res.fwer
+            #lines = res.report(samples, weights_hit, membership[:,j])
+            #for line in lines:
+            #    print '\t'.join(line)
+
+               
     except KeyboardInterrupt:
         ### handle keyboard interrupt ###
         pass

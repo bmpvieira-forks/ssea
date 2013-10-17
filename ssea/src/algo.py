@@ -111,6 +111,7 @@ class SampleSetResult(object):
         self.fdr = 1.0
         self.fwer = 1.0
         self.es_null = None
+        self.membership = None
 
     def plot_null_distribution(self):
         percent_neg = (100. * (self.es_null < 0).sum() / 
@@ -126,9 +127,7 @@ class SampleSetResult(object):
         ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % (percent_neg))
         return fig
 
-    def plot(self, membership, weights,
-             title='Enrichment plot',
-             plot_conf_int=True, conf_int=0.95):
+    def plot(self, plot_conf_int=True, conf_int=0.95):
         fig = plt.figure()
         #fig = plt.figure(figsize=(8, 6)) 
         gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
@@ -167,10 +166,10 @@ class SampleSetResult(object):
         ax0.grid(True)
         ax0.set_xticklabels([])
         ax0.set_ylabel('Enrichment score (ES)')
-        ax0.set_title(title)
+        ax0.set_title('Enrichment plot: %s' % (self.sample_set.name))
         # membership in sample set
         ax1 = plt.subplot(gs[1])
-        ax1.vlines(x=membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
+        ax1.vlines(x=self.membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
         ax1.set_xlim((0,len(self.es_run)))
         ax1.set_ylim((0,1))
         ax1.set_xticks([])
@@ -180,8 +179,8 @@ class SampleSetResult(object):
         ax1.set_ylabel('Set')
         # weights
         ax2 = plt.subplot(gs[2])
-        ax2.plot(weights[:,0], color='blue')
-        ax2.plot(weights[:,1], color='red')
+        ax2.plot(self.weights_miss, color='blue')
+        ax2.plot(self.weights_hit, color='red')
         ax2.set_xlabel('Samples')
         ax2.set_ylabel('Weights')
         # draw
@@ -204,7 +203,6 @@ class SampleSetResult(object):
         pass
 
 
-
 def ssea(samples, weights, sample_sets, 
          weight_methods=('unweighted', 'unweighted'), 
          weight_params=None, 
@@ -213,12 +211,6 @@ def ssea(samples, weights, sample_sets,
     ranks = np.argsort(weights)[::-1]
     samples = [samples[i] for i in ranks]
     weights = [weights[i] for i in ranks]
-    # transform weights based on weight method
-    weights_miss = transform_weights(weights, weight_methods[0], 
-                                     weight_params)
-    weights_hit = transform_weights(weights, weight_methods[1], 
-                                    weight_params)    
-    weights_arr = np.transpose((weights_miss, weights_hit))
     # perform run length encoding to keep track of ties in weights
     # and transform weights (same as above)
     rle_lengths, rle_weights = rle(weights)
@@ -236,23 +228,16 @@ def ssea(samples, weights, sample_sets,
     es_vals, rle_es_inds, rle_es_runs = \
         ssea_kernel(rle_lengths, rle_weights_miss, rle_weights_hit, 
                     membership, perm)
-#    es_vals_py, rle_es_inds_py, rle_es_runs_py = \
-#        ssea_kernel_py(rle_lengths, rle_weights_miss, rle_weights_hit, 
-#                       membership, perm)
-#    assert np.allclose(es_vals, es_vals_py)
     # permute samples and determine null distribution of ES
     es_null = np.zeros((perms,membership.shape[1]), dtype=np.float)
-#    es_null_py = np.zeros((perms,membership.shape[1]), dtype=np.float)
     for i in xrange(perms):
+        print i
         np.random.shuffle(perm)
         es_null[i] = ssea_kernel(rle_lengths, rle_weights_miss, 
                                  rle_weights_hit, membership, perm)[0]      
-#        es_null_py[i] = ssea_kernel_py(rle_lengths, rle_weights_miss, 
-#                                       rle_weights_hit, membership, perm)[0]
-#        assert np.allclose(es_null[i], es_null_py[i])
     # decode run length encoding
     es_run_inds = [sum(rle_lengths[:x+1]) for x in rle_es_inds]
-    es_runs = rld2d(rle_lengths, rle_es_runs)    
+    es_runs = rld2d(rle_lengths, rle_es_runs)
     # separate the positive and negative sides of the null distribution
     # based on the observed enrichment scores
     es_neg_inds = (es_vals < 0).nonzero()[0]
@@ -293,6 +278,11 @@ def ssea(samples, weights, sample_sets,
     pvals[es_pos_inds] = ppos
     # Control for multiple hypothesis testing and summarize results
     results = []
+    # transform weights based on weight method
+    weights_miss = transform_weights(weights, weight_methods[0], 
+                                     weight_params)
+    weights_hit = transform_weights(weights, weight_methods[1], 
+                                    weight_params)    
     for j in xrange(membership.shape[1]):
         # For a given NES(S) = NES* >= 0, the FDR is the ratio of the 
         # percentage of all permutations NES(S,null) >= 0, whose 
@@ -324,21 +314,9 @@ def ssea(samples, weights, sample_sets,
         res.fdr = fdr
         res.fwer = fwer
         res.es_null = es_null[:,j]
+        res.samples = samples
+        res.membership = membership[:,j]
+        res.weights_miss = weights_miss
+        res.weights_hit = weights_hit
         results.append(res)
-        # create plots and reports
-        #fig = res.plot_null_distribution()
-        #plt.show()
-        #plt.close()    
-        #fig.savefig('null_distribution_plot.png')
-        fig = res.plot(membership[:,j], weights_arr,
-                       title='Enrichment plot: %s' % (res.sample_set.name))
-        #fig.savefig('enrichment_plot.png')
-        plt.show()
-        plt.close()
-        #print res.sample_set.name, res.sample_set.desc
-        #print res.es, res.nes, 'p', res.p, 'fdr', res.fdr, 'fwer', res.fwer
-        #lines = res.report(samples, weights_hit, membership[:,j])
-        #for line in lines:
-        #    print '\t'.join(line)
-
     return results
