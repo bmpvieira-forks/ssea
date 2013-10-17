@@ -8,6 +8,9 @@ import numpy as np
 import matplotlib.pyplot as plt 
 import matplotlib.gridspec as gridspec
 
+#from pykernel import ssea_kernel_py
+from kernel import ssea_kernel
+
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
 LOG_TRANSFORM_CONSTANT = 1e-3
 LOG_TRANSFORM_BASE = 2.0
@@ -17,6 +20,8 @@ HISTOGRAM_BINS_NEG = np.linspace(-HISTOGRAM_LIMIT,0.,
                                  num=NUM_HISTOGRAM_BINS+1)
 HISTOGRAM_BINS_POS = np.linspace(0.,HISTOGRAM_LIMIT, 
                                  num=NUM_HISTOGRAM_BINS+1)
+BOOL_DTYPE = np.uint8
+FLOAT_DTYPE = np.float
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
@@ -92,7 +97,8 @@ class SampleSet(object):
         self.value = value
         
     def get_array(self, samples):
-        return np.array([x in self.value for x in samples])
+        return np.array([x in self.value for x in samples], 
+                        dtype=BOOL_DTYPE)
 
 class SampleSetResult(object):
     def __init__(self):
@@ -164,9 +170,9 @@ class SampleSetResult(object):
         ax0.set_title(title)
         # membership in sample set
         ax1 = plt.subplot(gs[1])
-        ax1.bar(np.arange(len(membership)), membership, 1, color='black', 
-                edgecolor='none', label='Hits')
-        ax1.set_xlim((0, len(self.es_run)))
+        ax1.vlines(x=membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
+        ax1.set_xlim((0,len(self.es_run)))
+        ax1.set_ylim((0,1))
         ax1.set_xticks([])
         ax1.set_yticks([])
         ax1.set_xticklabels([])
@@ -197,43 +203,7 @@ class SampleSetResult(object):
     def report_html(self):
         pass
 
-def _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d):
-    # evaluate the fraction of samples in S "hits" and the fraction of 
-    # samples not in S "misses" present up to a given position i in L
-    phit = np.zeros((len(rle_lengths), membership2d.shape[1]), dtype=np.float)
-    pmiss = np.zeros((len(rle_lengths), membership2d.shape[1]), dtype=np.float)
-    offset = 0
-    for i in xrange(len(rle_lengths)):
-        # run length encoding ensures that tied weights get added to same 
-        # index of the hit/miss array
-        length = rle_lengths[i]
-        wt_miss, wt_hit = rle_weights_arr[i]
-        # count hits and misses at this index (all samples have identical 
-        # weight)
-        counts_hit = membership2d[offset:offset+length,:].sum(axis=0)
-        counts_miss = length - counts_hit
-        # update pmiss/phit vectors
-        pmiss[i] = wt_miss * counts_miss
-        phit[i] = wt_hit * counts_hit        
-        offset += length
-    pmiss = pmiss.cumsum(axis=0)
-    phit = phit.cumsum(axis=0)
-    # handle cases where a sample set has a cumulative sum of zero
-    norm_miss = np.where(pmiss[-1,:] > 0, pmiss[-1,:], 1.0)
-    norm_hit = np.where(phit[-1,:] > 0, phit[-1,:], 1.0)
-    # normalize cumulative sums
-    pmiss /= norm_miss
-    phit /= norm_hit
-    # the enrichment score (ES) is the maximum deviation from zero of
-    # phit - pmiss. for a randomly distributed S, ES(S) will be relatively
-    # small, but if it is concentrated at the top of bottom of the list,
-    # or otherwise nonrandomly distributed, then ES(S) will be 
-    # correspondingly high
-    es_runs = phit - pmiss
-    es_run_inds = np.abs(es_runs).argmax(axis=0)
-    es_vals = np.array([es_runs[x,j] for x,j in zip(es_run_inds,range(len(rle_lengths)))])
-    #es_vals = np.choose(es_run_inds, es_runs)
-    return es_vals, es_run_inds, es_runs
+
 
 def ssea(samples, weights, sample_sets, 
          weight_methods=('unweighted', 'unweighted'), 
@@ -256,21 +226,30 @@ def ssea(samples, weights, sample_sets,
                                          weight_params)
     rle_weights_hit = transform_weights(rle_weights, weight_methods[1], 
                                         weight_params)
-    rle_weights_arr = np.transpose((rle_weights_miss, rle_weights_hit))
     # convert sample sets to membership vectors
-    membership2d = np.zeros((len(samples), len(sample_sets)), dtype=np.bool)
+    membership = np.zeros((len(samples),len(sample_sets)), 
+                            dtype=BOOL_DTYPE)
     for j,sample_set in enumerate(sample_sets):
-        membership2d[:,j] = sample_set.get_array(samples)
+        membership[:,j] = sample_set.get_array(samples)
     # determine enrichment score (ES)
+    perm = np.arange(len(samples))
     es_vals, rle_es_inds, rle_es_runs = \
-        _ssea_kernel2d(rle_lengths, rle_weights_arr, membership2d)
+        ssea_kernel(rle_lengths, rle_weights_miss, rle_weights_hit, 
+                    membership, perm)
+#    es_vals_py, rle_es_inds_py, rle_es_runs_py = \
+#        ssea_kernel_py(rle_lengths, rle_weights_miss, rle_weights_hit, 
+#                       membership, perm)
+#    assert np.allclose(es_vals, es_vals_py)
     # permute samples and determine null distribution of ES
-    es_null = np.zeros((perms,membership2d.shape[1]), dtype=np.float)
-    null_membership = membership2d.copy()
+    es_null = np.zeros((perms,membership.shape[1]), dtype=np.float)
+#    es_null_py = np.zeros((perms,membership.shape[1]), dtype=np.float)
     for i in xrange(perms):
-        np.random.shuffle(null_membership)
-        es_null[i] = _ssea_kernel2d(rle_lengths, rle_weights_arr, 
-                                    null_membership)[0]
+        np.random.shuffle(perm)
+        es_null[i] = ssea_kernel(rle_lengths, rle_weights_miss, 
+                                 rle_weights_hit, membership, perm)[0]      
+#        es_null_py[i] = ssea_kernel_py(rle_lengths, rle_weights_miss, 
+#                                       rle_weights_hit, membership, perm)[0]
+#        assert np.allclose(es_null[i], es_null_py[i])
     # decode run length encoding
     es_run_inds = [sum(rle_lengths[:x+1]) for x in rle_es_inds]
     es_runs = rld2d(rle_lengths, rle_es_runs)    
@@ -299,7 +278,7 @@ def ssea(samples, weights, sample_sets,
     # the ES(S,null) separately for positive and negative ES(S)
     nes_obs_neg = es_vals[es_neg_inds] / np.fabs(es_null_neg_means) 
     nes_obs_pos = es_vals[es_pos_inds] / np.fabs(es_null_pos_means) 
-    nes_vals = np.ones(membership2d.shape[1], dtype=np.float) 
+    nes_vals = np.ones(membership.shape[1], dtype=np.float) 
     nes_vals[es_neg_inds] = nes_obs_neg
     nes_vals[es_pos_inds] = nes_obs_pos
     # estimate nominal p value for S from ES(S,null) by using the
@@ -309,12 +288,12 @@ def ssea(samples, weights, sample_sets,
     pneg = pneg / (es_null_neg.count(axis=0).astype(float))
     ppos = (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
     ppos = ppos / (es_null_pos.count(axis=0).astype(np.float))
-    pvals = np.ones(membership2d.shape[1], dtype=np.float) 
+    pvals = np.ones(membership.shape[1], dtype=np.float) 
     pvals[es_neg_inds] = pneg
     pvals[es_pos_inds] = ppos
     # Control for multiple hypothesis testing and summarize results
     results = []
-    for j in xrange(membership2d.shape[1]):
+    for j in xrange(membership.shape[1]):
         # For a given NES(S) = NES* >= 0, the FDR is the ratio of the 
         # percentage of all permutations NES(S,null) >= 0, whose 
         # NES(S,null) >= NES*, divided by the percentage of observed S with 
@@ -347,19 +326,19 @@ def ssea(samples, weights, sample_sets,
         res.es_null = es_null[:,j]
         results.append(res)
         # create plots and reports
-        fig = res.plot_null_distribution()
-        plt.show()
-        plt.close()    
+        #fig = res.plot_null_distribution()
+        #plt.show()
+        #plt.close()    
         #fig.savefig('null_distribution_plot.png')
-        fig = res.plot(membership2d[:,j], weights_arr,
-                       title='Enrichment plot: %s' % (sample_set.name))
+        fig = res.plot(membership[:,j], weights_arr,
+                       title='Enrichment plot: %s' % (res.sample_set.name))
         #fig.savefig('enrichment_plot.png')
         plt.show()
         plt.close()
-        print res.sample_set.name, res.sample_set.desc
-        print res.es, res.nes, 'p', res.p, 'fdr', res.fdr, 'fwer', res.fwer
-        #lines = res.report(samples, weights_hit, membership)
+        #print res.sample_set.name, res.sample_set.desc
+        #print res.es, res.nes, 'p', res.p, 'fdr', res.fdr, 'fwer', res.fwer
+        #lines = res.report(samples, weights_hit, membership[:,j])
         #for line in lines:
         #    print '\t'.join(line)
 
-    return
+    return results

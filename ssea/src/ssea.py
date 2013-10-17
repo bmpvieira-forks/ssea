@@ -29,7 +29,7 @@ __updated__ = '2013-10-09'
 
 DEBUG = 1
 TESTRUN = 0
-PROFILE = 0
+PROFILE = 1
 
 class CLIError(Exception):
     '''Generic exception to raise and log different fatal errors.'''
@@ -174,10 +174,10 @@ USAGE
         else:
             weight_methods = fields[:2]
         # run
-        ssea(samples, weights, sample_sets, 
-             weight_methods=weight_methods,
-             weight_params=weight_params, 
-             perms=perms)            
+        results = ssea(samples, weights, sample_sets, 
+                       weight_methods=weight_methods,
+                       weight_params=weight_params, 
+                       perms=perms)            
     except KeyboardInterrupt:
         ### handle keyboard interrupt ###
         pass
@@ -201,7 +201,7 @@ if __name__ == "__main__":
     if PROFILE:
         import cProfile
         import pstats
-        profile_filename = '_profile.txt'
+        profile_filename = '_profile.bin'
         cProfile.run('main()', profile_filename)
         statsfile = open("profile_stats.txt", "wb")
         p = pstats.Stats(profile_filename, stream=statsfile)
