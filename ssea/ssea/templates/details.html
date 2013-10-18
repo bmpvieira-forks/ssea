@@ -1,50 +1,54 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
 <html lang="en">
 <head>
-    <title>Details for sample set {{ data['name'] }}</title>
+    <title>Details for enrichment of {{ name }} on sample set {{ report['name'] }}</title>
 
 	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
 </head>
 
 <body>
+
 SSEA Detailed Report
-<br/><br/><br/>
+<br/>
+Enrichment of {{ name }} ({{ desc }}) on sample set {{ report['name'] }} ({{ report['desc'] }})
+<br/><br/>
 <table class="gridtable">
 <thead>
 <tr><th>Sample set parameter</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td>Name</td><td>{{ name }}</td></tr>
-<tr><td>Sample set name</td><td>{{ data['name'] }}</td></tr>
-<tr><td>Sample set description</td><td>{{ data['desc'] }}</td></tr>
-<tr><td>Sample set size</td><td>{{ data['size'] }}</td></tr>
-<tr><td>Enrichment Score (ES)</td><td>{{ data['es'] }}</td></tr>
-<tr><td>Normalized Enrichment Score (ES)</td><td>{{ data['nes'] }}</td></tr>
-<tr><td>Nominal p-value</td><td>{{ data['pval'] }}</td></tr>
-<tr><td>FDR q-value</td><td>{{ data['qval'] }}</td></tr>
-<tr><td>FWER p-value</td><td>{{ data['fwer'] }}</td></tr>
-<tr><td>Rank at maximum running ES</td><td>{{ data['rank_at_max'] }}</td></tr>
-<tr><td>Leading edge size</td><td>{{ data['leading_edge_size'] }}</td></tr>
+<tr><td>Test name</td><td>{{ name }}</td></tr>
+<tr><td>Test description</td><td>{{ desc }}</td></tr>
+<tr><td>Sample set name</td><td>{{ report['name'] }}</td></tr>
+<tr><td>Sample set description</td><td>{{ report['desc'] }}</td></tr>
+<tr><td>Sample set size</td><td>{{ report['size'] }}</td></tr>
+<tr><td>Enrichment Score (ES)</td><td>{{ report['es'] }}</td></tr>
+<tr><td>Normalized Enrichment Score (ES)</td><td>{{ report['nes'] }}</td></tr>
+<tr><td>Nominal p-value</td><td>{{ report['pval'] }}</td></tr>
+<tr><td>FDR q-value</td><td>{{ report['qval'] }}</td></tr>
+<tr><td>FWER p-value</td><td>{{ report['fwerp'] }}</td></tr>
+<tr><td>Rank at maximum running ES</td><td>{{ report['rank_at_max'] }}</td></tr>
+<tr><td>Leading edge size</td><td>{{ report['leading_edge_size']}}</td></tr>
 </tbody>
 </table>
 
-<br/><br/><br/>
+<br/><br/>
 
-<img name="enplot_{{ name }}_vs_{{ data['name'] }}" src="{{ data['eplot_png'] }}"/>
+<img name="enplot_{{ name }}_vs_{{ report['name'] }}" src="{{ details['eplot_png'] }}"/>
 <br/>
-Fig 1: Enrichment plot for {{ data['name'] }}
+Fig 1: Enrichment plot for {{ report['name'] }}
 <br/>
 Profile of the running ES score & positions of sample set members in the ordered list
 <br/>
-<a href="{{ data['eplot_pdf'] }}">Download PDF</a>
+<a href="{{ details['eplot_pdf'] }}">Download PDF</a>
 <br/><br/><br/>
 
 <table class="gridtable">
 <thead>
-<tr>{% for colname in data['details']['header'] %}<th>{{ colname }}</th>{% endfor %}</tr>
+<tr>{% for colname in details['header'] %}<th>{{ colname }}</th>{% endfor %}</tr>
 </thead>
 <tbody>
-{% for row in data['details']['rows'] %}
+{% for row in details['rows'] %}
 <tr>
   {% for val in row %}
     <td>{{ val }}</td>
@@ -56,14 +60,14 @@ Profile of the running ES score & positions of sample set members in the ordered
 
 <br/><br/><br/>
 
-<img name="null_dist_{{ name }}_vs_{{ data['name'] }}" src="{{ data['null_png'] }}"/>
+<img name="null_dist_{{ name }}_vs_{{ report['name'] }}" src="{{ details['null_png'] }}"/>
 
 <br/>
-Fig 2: Random ES distribution for {{ data['name'] }}
+Fig 2: Random ES distribution for {{ report['name'] }}
 <br/>
-Gene set null distribution of ES for {{ data['name'] }}
+Gene set null distribution of ES for {{ report['name'] }}
 <br/>
-<a href="{{ data['null_pdf'] }}">Download PDF</a>
+<a href="{{ details['null_pdf'] }}">Download PDF</a>
 
 </body>
 </html>

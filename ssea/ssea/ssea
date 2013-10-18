@@ -24,8 +24,6 @@ import os
 import argparse
 import logging
 import shutil
-from time import time
-from datetime import datetime
 import json
 import matplotlib.pyplot as plt
 
@@ -37,8 +35,10 @@ env = Environment(loader=PackageLoader("ssea", "templates"))
 import ssea as _ssea
 src_web_path = os.path.join(_ssea.__path__[0], 'web')
 
-# import main function
-from ssea.algo import ssea_run, SampleSet, WEIGHT_METHODS
+# local imports
+from ssea.config import Config
+from ssea.base import SampleSet, WeightMatrix
+from ssea.algo import ssea_run 
 
 __all__ = []
 __version__ = 0.1
@@ -59,80 +59,115 @@ class CLIError(Exception):
     def __unicode__(self):
         return self.msg
 
-class ParserError(Exception):
-    '''Error parsing a file.'''
-    def __init__(self, msg):
-        super(ParserError).__init__(type(self))
-        self.msg = "ERROR: %s" % msg
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
+def report_config(config):
+    # write main json file
+    json_data = {'name': args.name,
+                 'prog': program_version_message,
+                 'perms': perms,
+                 'weight_method_miss': args.weight_miss,
+                 'weight_method_hit': args.weight_hit,
+                 'results': json_data}
+    pass
 
-def render_sample_set(name, json_dict):
-    t = env.get_template('detailedreport.html')
-    htmlstring = t.render(name=name,data=json_dict)
-    return htmlstring
+def report_single_test(wobj, res, config):
+    eplot_png = '%s.%s.eplot.png' % (wobj.name, res.sample_set.name)
+    eplot_pdf = '%s.%s.eplot.pdf' % (wobj.name, res.sample_set.name)
+    null_png = '%s.%s.null.png' % (wobj.name, res.sample_set.name)
+    null_pdf = '%s.%s.null.pdf' % (wobj.name, res.sample_set.name)            
+    details_json = '%s.%s.json' % (wobj.name, res.sample_set.name)
+    details_html = '%s.%s.html' % (wobj.name, res.sample_set.name)
+    # create enrichment plot
+    fig = res.plot(plot_conf_int=config.plot_conf_int,
+                   conf_int=config.conf_int)
+    fig.savefig(os.path.join(config.output_dir, eplot_png))
+    fig.savefig(os.path.join(config.output_dir, eplot_pdf))
+    plt.close()
+    # create null distribution plot
+    fig = res.plot_null_distribution()
+    fig.savefig(os.path.join(config.output_dir, null_png))
+    fig.savefig(os.path.join(config.output_dir, null_pdf))
+    plt.close()
+    # create detailed report
+    reportdict = res.get_report_json()
+    detailsdict = res.get_details_json()
+    detailsdict.update({'eplot_png': eplot_png,
+                        'eplot_pdf': eplot_pdf,
+                        'null_png': null_png,
+                        'null_pdf': null_pdf})
+    fp = open(os.path.join(config.output_dir, details_json), 'w')
+    json.dump(detailsdict, fp)
+    fp.close()
+    # render to html
+    t = env.get_template('details.html')
+    fp = open(os.path.join(config.output_dir, details_html), 'w')
+    print >>fp, t.render(name=wobj.name, 
+                         desc=wobj.desc,
+                         report=reportdict,
+                         details=detailsdict)
+    fp.close()
+    # update report dict
+    reportdict['details_json'] = details_json
+    reportdict['details_html'] = details_html
+    return reportdict
 
-def timestamp():
-    return datetime.fromtimestamp(time()).strftime('%Y-%m-%d-%H-%M-%S-%f')
+def report_single_observation(wobj, results, config):
+    # create detailed reports
+    jsondict = {'name': wobj.name,
+                'desc': wobj.desc}
+    reports = []
+    for res in results:
+        reports.append(report_single_test(wobj, res, config))
+    jsondict['reports'] = reports
+    # create observation report
+    report_json = '%s.json' % (wobj.name)
+    fp = open(os.path.join(config.output_dir, report_json), 'w')              
+    json.dump(jsondict, fp, indent=2, sort_keys=True)
+    fp.close()
+    # render to html
+    report_html = '%s.html' % (wobj.name)
+    t = env.get_template('report.html')
+    fp = open(os.path.join(config.output_dir, report_html), 'w')
+    print >>fp, t.render(data=jsondict)
+    fp.close()
+    # update report dict
+    jsondict['report_json'] = report_json
+    jsondict['report_html'] = report_html    
+    return jsondict
 
-def parse_gmx(filename):
-    fileh = open(filename)
-    names = fileh.next().strip().split('\t')
-    descs = fileh.next().strip().split('\t')
-    if len(names) != len(descs):
-        raise ParserError("Number of fields in differ in columns 1 and 2 of sample set file")
-    sample_sets = [SampleSet(name=n,desc=d,value=set()) for n,d in zip(names,descs)]
-    lineno = 3
-    for line in fileh:
-        if not line:
-            continue
-        line = line.strip()
-        if not line:
-            continue
-        fields = line.split('\t')
-        for i,f in enumerate(fields):
-            if not f:
-                continue
-            sample_sets[i].value.add(f)
-        lineno += 1
-    fileh.close()
-    return sample_sets
+def report_meta_sample_set():
+    pass
 
-def parse_gmt(filename):
+def report_meta_all():
+    pass
+
+def ssea_main(config):
+    # read sample sets
+    logging.info("Reading sample sets")
     sample_sets = []
-    fileh = open(filename)    
-    for line in fileh:
-        fields = line.strip().split('\t')
-        name = fields[0]
-        desc = fields[1]
-        values = set(fields[2:])
-        sample_sets.append(SampleSet(name, desc, values))
-    fileh.close()
-    return sample_sets
-
-def parse_weights(filename):
-    samples = []
-    weights = []
-    fileh = open(filename)
-    lineno = 1
-    for line in open(filename):
-        fields = line.strip().split('\t')
-        if len(fields) == 0:
-            continue
-        elif len(fields) == 1:
-            raise ParserError("Only one field at line number %d" % (lineno))
-        sample = fields[0]
-        try:
-            rank = float(fields[1])
-        except ValueError:
-            raise ParserError("Value at line number %d cannot be converted to a floating point number" % (lineno))    
-        samples.append(sample)
-        weights.append(rank)
-        lineno += 1
-    fileh.close()
-    return samples,weights
+    for filename in config.smx_files:
+        logging.debug("\tFile: %s" % (filename))
+        sample_sets.extend(SampleSet.parse_smx(filename))
+    for filename in config.smt_files:
+        logging.debug("\tFile: %s" % (filename))
+        sample_sets.extend(SampleSet.parse_smt(filename))
+    logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
+    # setup output directory
+    if not os.path.exists(config.output_dir):
+        logging.info("Creating output directory '%s'" % (config.output_dir))
+        os.makedirs(config.output_dir)
+    web_dir = os.path.join(config.output_dir, 'web')
+    if not os.path.exists(web_dir):
+        logging.info("\tInstalling web files")
+        shutil.copytree(src_web_path, web_dir)        
+    # parse weight matrix and run main ssea algorithm
+    logging.info("Running SSEA")
+    for wobj in WeightMatrix.parse_wmt(config.weight_matrix_file):
+        logging.info("\tName: %s (%s)" % (wobj.name, wobj.desc))
+        results = ssea_run(wobj.samples, wobj.weights, sample_sets, 
+                           weight_method_miss=config.weight_miss,
+                           weight_method_hit=config.weight_hit,
+                           perms=config.perms)
+        report_single_observation(wobj, results, config)
 
 def main(argv=None):
     '''Command line options.'''    
@@ -160,147 +195,33 @@ def main(argv=None):
 USAGE
 ''' % (program_shortdesc, str(__date__))
 
+    # create instance of run configuration
+    config = Config()
     try:
         # Setup argument parser
-        parser = argparse.ArgumentParser(description=program_license, 
-                                         formatter_class=argparse.RawDescriptionHelpFormatter)
+        parser = argparse.ArgumentParser(description=program_license)
+        # Add command line parameters
+        config.get_argument_parser(parser)
         parser.add_argument("-v", "--verbose", dest="verbose", 
                             action="store_true", default=False, 
                             help="set verbosity level [default: %(default)s]")
         parser.add_argument('-V', '--version', action='version', 
                             version=program_version_message)
-        parser.add_argument('--weight-miss', dest='weight_miss',
-                            choices=WEIGHT_METHODS, default='weighted') 
-        parser.add_argument('--weight-hit', dest='weight_hit', 
-                            choices=WEIGHT_METHODS, default='weighted')
-        parser.add_argument('--perms', type=int, default=1000)
-        parser.add_argument('--no-plot-conf-int', dest="plot_conf_int", 
-                            action="store_false", default=True)
-        parser.add_argument('--conf-int', dest="conf_int", type=float, 
-                            default=0.95)
-        parser.add_argument('--gmx', dest="gmx_files", action='append')
-        parser.add_argument('--gmt', dest="gmt_files", action='append')
-        parser.add_argument('-o', '--output-dir', dest="output_dir", default=None)
-        parser.add_argument('-n', '--name', dest="name", default="myssea")
-        parser.add_argument('weights_file') 
         # Process arguments
         args = parser.parse_args()
-        verbose = args.verbose
-        weights_file = args.weights_file
-        gmx_files = args.gmx_files
-        gmt_files = args.gmt_files
-        output_dir = args.output_dir
-        name = args.name
         # setup logging
-        if DEBUG or (verbose > 0):
+        if DEBUG or (args.verbose > 0):
             level = logging.DEBUG
         else:
             level = logging.INFO
         logging.basicConfig(level=level,
                             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-        # check and get parameters
-        perms = max(1, args.perms)
-        # read sample sets
-        sample_sets = []
-        if gmx_files is not None:
-            for filename in gmx_files:
-                if not os.path.exists(filename):
-                    parser.error("gmx file '%s' not found" % (filename))
-                sample_sets.extend(parse_gmx(filename))
-        if gmt_files is not None:
-            for filename in gmt_files:
-                if not os.path.exists(filename):
-                    parser.error("gmt file '%s' not found" % (filename))
-                sample_sets.extend(parse_gmt(filename))
-        # read weights
-        if not os.path.exists(weights_file):
-            parser.error("weights file '%s' not found" % (weights_file))
-        samples, weights = parse_weights(weights_file)
-        # output directory
-        if output_dir is None:
-            output_dir = "SSEA_%s" % (timestamp())
-        #if os.path.exists(output_dir):
-        #    parser.error("output directory '%s' already exists" % (output_dir))
+        # initialize configuration
+        config.parse_args(parser, args)
+        config.log()
         # run
-        logging.info("Parameters")
-        logging.info("\tname:               %s" % (name))
-        logging.info("\toutput directory:   %s" % (output_dir))
-        logging.info("\tnum sample sets:    %d" % (len(sample_sets)))
-        logging.info("\tpermutations:       %d" % (perms))
-        logging.info("\tweight method miss: %s" % (args.weight_miss))
-        logging.info("\tweight method hit:  %s" % (args.weight_hit))
-        logging.info("\tplot conf interval: %s" % (args.plot_conf_int))
-        logging.info("\tconf interval:      %f" % (args.conf_int))
-        logging.info("Running SSEA")
-        results = ssea_run(samples, weights, sample_sets, 
-                           weight_method_miss=args.weight_miss,
-                           weight_method_hit=args.weight_hit,
-                           perms=perms)
-        # setup output directory
-        if not os.path.exists(output_dir):
-            logging.info("Creating output directory '%s'" % (output_dir))
-            os.makedirs(output_dir)
-        web_dir = os.path.join(output_dir, 'web')
-        if not os.path.exists(web_dir):
-            logging.info("\tInstalling web files")
-            shutil.copytree(src_web_path, web_dir)        
-        logging.info("Writing output")
-        json_data = []
-        for res in results:
-            # create enrichment plot
-            enrichment_png = '%s.%s.eplot.png' % (name, res.sample_set.name)
-            enrichment_pdf = '%s.%s.eplot.pdf' % (name, res.sample_set.name)
-            fig = res.plot(plot_conf_int=args.plot_conf_int,
-                           conf_int=args.conf_int)
-            fig.savefig(os.path.join(output_dir, enrichment_png))
-            fig.savefig(os.path.join(output_dir, enrichment_pdf))
-            plt.close()
-            # create null distribution plot
-            null_png = '%s.%s.null.png' % (name, res.sample_set.name)
-            null_pdf = '%s.%s.null.pdf' % (name, res.sample_set.name)            
-            fig = res.plot_null_distribution()
-            fig.savefig(os.path.join(output_dir, null_png))
-            fig.savefig(os.path.join(output_dir, null_pdf))
-            plt.close()
-            # create report dictionary for json
-            d = res.get_report_json()
-            # update dictionary with image files
-            d.update({'eplot_png': enrichment_png,
-                      'eplot_pdf': enrichment_pdf,
-                      'null_png': null_png,
-                      'null_pdf': null_pdf})
-            details_json = '%s.%s.json' % (name, res.sample_set.name)
-            fp = open(os.path.join(output_dir, details_json), 'w')
-            json.dump(d, fp)
-            fp.close()
-            # render to html
-            t = env.get_template('details.html')
-            details_html = '%s.%s.html' % (name, res.sample_set.name)
-            fp = open(os.path.join(output_dir, details_html), 'w')
-            print >>fp, t.render(name=name,data=d)
-            fp.close()
-            # delete details and save overview stats
-            del d['details'] 
-            d['details_json'] = details_json
-            d['details_html'] = details_html
-            json_data.append(d)
-        # write main json file
-        json_data = {'name': name,
-                     'prog': program_version_message,
-                     'perms': perms,
-                     'weight_method_miss': args.weight_miss,
-                     'weight_method_hit': args.weight_hit,
-                     'results': json_data}
-        report_filename = '%s.json' % (name)
-        fp = open(os.path.join(output_dir, report_filename), 'w')              
-        json.dump(json_data, fp, indent=2, sort_keys=True)
-        fp.close()
-        # render to html
-        t = env.get_template('report.html')
-        html_filename = '%s.html' % (name)
-        fp = open(os.path.join(output_dir, html_filename), 'w')
-        print >>fp, t.render(data=json_data)
-        fp.close()
+        ssea_main(config)
+
     except KeyboardInterrupt:
         ### handle keyboard interrupt ###
         pass

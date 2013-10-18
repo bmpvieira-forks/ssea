@@ -14,11 +14,9 @@ import matplotlib.gridspec as gridspec
 
 # local imports
 from kernel import ssea_kernel
+from base import BOOL_DTYPE
 
-WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
 LOG_TRANSFORM_CONSTANT = 1e-3
-BOOL_DTYPE = np.uint8
-FLOAT_DTYPE = np.float
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
@@ -87,16 +85,6 @@ def rld2d(lengths, arr2d):
         offset += length
     return out
 
-class SampleSet(object):    
-    def __init__(self, name=None, desc=None, value=None):
-        self.name = name
-        self.desc = desc
-        self.value = value
-        
-    def get_array(self, samples):
-        return np.array([x in self.value for x in samples], 
-                        dtype=BOOL_DTYPE)
-
 class SampleSetResult(object):
     def __init__(self):
         self.sample_set = None
@@ -104,9 +92,9 @@ class SampleSetResult(object):
         self.nes = 0.0
         self.es_run_ind = 0
         self.es_run = None
-        self.p = 1.0
-        self.fdr = 1.0
-        self.fwer = 1.0
+        self.pval = 1.0
+        self.qval = 1.0
+        self.fwerp = 1.0
         self.es_null = None
         self.membership = None
         self.samples = None
@@ -188,31 +176,37 @@ class SampleSetResult(object):
         fig.tight_layout()
         return fig
 
-    def get_report_json(self):
+    def get_details_header(self):
+        return 
+        
+    def get_details_json(self):
         details = {'header': ['index', 'sample', 'rank', 'weight', 
                               'running_es', 'core_enrichment']}
-        leading_edge_size = 0
         member_inds = (self.membership > 0).nonzero()[0]
-        rows = []        
+        rows = []
         for i,ind in enumerate(member_inds):
             is_enriched = int(ind <= self.es_run_ind)
-            leading_edge_size += is_enriched
             # index, sample, rank, weight, running_es, core
             row = [i, self.samples[ind], ind+1, self.weights[ind], 
                    self.es_run[ind], is_enriched]
             rows.append(row)
         details['rows'] = rows
+        return details
+
+    def get_report_json(self):
+        member_inds = (self.membership > 0).nonzero()[0]
+        leading_edge_size = sum(ind <= self.es_run_ind 
+                                for ind in member_inds)
         d = {'name': self.sample_set.name,
              'desc': self.sample_set.desc,
              'size': len(self.sample_set.value),
              'es': self.es,
              'nes': self.nes,
-             'pval': self.p,
-             'qval': self.fdr,
-             'fwer': self.fwer,
+             'pval': self.pval,
+             'qval': self.qval,
+             'fwerp': self.fwerp,
              'rank_at_max': self.es_run_ind,
-             'leading_edge_size': leading_edge_size,
-             'details': details}
+             'leading_edge_size': leading_edge_size}
         return d
 
 
@@ -315,12 +309,12 @@ def ssea_run(samples, weights, sample_sets,
         if np.sign(es_vals[j]) < 0:
             n = (nes_null_neg <= nes).sum() / float(nes_null_neg_count)
             d = (nes_obs_neg <= nes).sum() / float(len(nes_obs_neg))
-            fwer = (nes_null_min <= nes).sum() / float(len(nes_null_min))
+            fwerp = (nes_null_min <= nes).sum() / float(len(nes_null_min))
         else:
             n = (nes_null_pos >= nes).sum() / float(nes_null_pos_count)
             d = (nes_obs_pos >= nes).sum() / float(len(nes_obs_pos))
-            fwer = (nes_null_max >= nes).sum() / float(len(nes_null_max))
-        fdr = n / d
+            fwerp = (nes_null_max >= nes).sum() / float(len(nes_null_max))
+        qval = n / d
         # create result object
         res = SampleSetResult()
         res.sample_set = sample_sets[j]
@@ -328,9 +322,9 @@ def ssea_run(samples, weights, sample_sets,
         res.nes = nes_vals[j]
         res.es_run_ind = es_run_inds[j]
         res.es_run = es_runs[:,j]
-        res.p = pvals[j]
-        res.fdr = fdr
-        res.fwer = fwer
+        res.pval = pvals[j]
+        res.qval = qval
+        res.fwerp = fwerp
         res.es_null = es_null[:,j]
         res.samples = samples
         res.weights = weights
