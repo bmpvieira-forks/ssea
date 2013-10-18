@@ -3,23 +3,20 @@ Created on Oct 9, 2013
 
 @author: mkiyer
 '''
+# set matplotlib backend
+import matplotlib
+matplotlib.use('Agg')
+
 from itertools import groupby
 import numpy as np
 import matplotlib.pyplot as plt 
 import matplotlib.gridspec as gridspec
 
-#from pykernel import ssea_kernel_py
+# local imports
 from kernel import ssea_kernel
 
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
 LOG_TRANSFORM_CONSTANT = 1e-3
-LOG_TRANSFORM_BASE = 2.0
-NUM_HISTOGRAM_BINS = 100000
-HISTOGRAM_LIMIT = 10.0
-HISTOGRAM_BINS_NEG = np.linspace(-HISTOGRAM_LIMIT,0., 
-                                 num=NUM_HISTOGRAM_BINS+1)
-HISTOGRAM_BINS_POS = np.linspace(0.,HISTOGRAM_LIMIT, 
-                                 num=NUM_HISTOGRAM_BINS+1)
 BOOL_DTYPE = np.uint8
 FLOAT_DTYPE = np.float
 
@@ -47,7 +44,7 @@ def quantile(a, frac, limit=(), interpolation_method='fraction'):
                              "'lower' or 'higher'")
     return score
 
-def transform_weights(weights, method, params):
+def transform_weights(weights, method):
     if method == 'unweighted':
         return np.ones(len(weights), dtype=np.float)
     elif method == 'weighted':
@@ -112,6 +109,11 @@ class SampleSetResult(object):
         self.fwer = 1.0
         self.es_null = None
         self.membership = None
+        self.samples = None
+        self.weights = None
+        self.membership = None
+        self.weights_miss = None
+        self.weights_hit = None
 
     def plot_null_distribution(self):
         percent_neg = (100. * (self.es_null < 0).sum() / 
@@ -120,7 +122,7 @@ class SampleSetResult(object):
         ax = fig.add_subplot(1,1,1)
         num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
-        n, bins, patches = ax.hist(self.es_null, bins=num_bins, histtype='bar')
+        ax.hist(self.es_null, bins=num_bins, histtype='bar')
         ax.axvline(x=self.es, linestyle='--', color='black')
         ax.set_title('Random ES distribution')
         ax.set_ylabel('P(ES)')
@@ -133,12 +135,11 @@ class SampleSetResult(object):
         gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
         # running enrichment score
         ax0 = plt.subplot(gs[0])
-        y = [0]
-        y.extend(self.es_run)
-        x = np.arange(len(y))
+        x = np.arange(len(self.es_run))
+        y = self.es_run
         ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
         ax0.axhline(y=0, color='gray')
-        ax0.axvline(x=self.es_run_ind, lw=2, linestyle='--', color='black')
+        ax0.axvline(x=self.es_run_ind, lw=1, linestyle='--', color='black')
         # confidence interval
         if plot_conf_int:
             if np.sign(self.es) < 0:
@@ -169,7 +170,7 @@ class SampleSetResult(object):
         ax0.set_title('Enrichment plot: %s' % (self.sample_set.name))
         # membership in sample set
         ax1 = plt.subplot(gs[1])
-        ax1.vlines(x=self.membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
+        ax1.vlines(self.membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
         ax1.set_xlim((0,len(self.es_run)))
         ax1.set_ylim((0,1))
         ax1.set_xticks([])
@@ -186,38 +187,51 @@ class SampleSetResult(object):
         # draw
         fig.tight_layout()
         return fig
-    
-    def report(self, samples, weights, membership):
-        lines = []
-        lines.append(['# INDEX', 'SAMPLE', 'RANK', 'WEIGHT', 'RUNNING_ES', 
-                      'CORE_ENRICHMENT'])
-        member_inds = (membership > 0).nonzero()[0]
+
+    def get_report_json(self):
+        details = {'header': ['index', 'sample', 'rank', 'weight', 
+                              'running_es', 'core_enrichment']}
+        leading_edge_size = 0
+        member_inds = (self.membership > 0).nonzero()[0]
+        rows = []        
         for i,ind in enumerate(member_inds):
-            is_enriched = 'Yes' if (ind < self.es_run_ind) else 'No'
-            fields = [i, samples[ind], ind+1, weights[ind], 
-                      self.es_run[ind], is_enriched]
-            lines.append(map(str, fields))
-        return lines
-    
-    def report_html(self):
-        pass
+            is_enriched = int(ind <= self.es_run_ind)
+            leading_edge_size += is_enriched
+            # index, sample, rank, weight, running_es, core
+            row = [i, self.samples[ind], ind+1, self.weights[ind], 
+                   self.es_run[ind], is_enriched]
+            rows.append(row)
+        details['rows'] = rows
+        d = {'name': self.sample_set.name,
+             'desc': self.sample_set.desc,
+             'size': len(self.sample_set.value),
+             'es': self.es,
+             'nes': self.nes,
+             'pval': self.p,
+             'qval': self.fdr,
+             'fwer': self.fwer,
+             'rank_at_max': self.es_run_ind,
+             'leading_edge_size': leading_edge_size,
+             'details': details}
+        return d
 
 
 def ssea(samples, weights, sample_sets, 
-         weight_methods=('unweighted', 'unweighted'), 
-         weight_params=None, 
+         weight_method_miss='unweighted',
+         weight_method_hit='unweighted',
          perms=10000):
     # rank order the N samples in D to form L={s1...sn} 
     ranks = np.argsort(weights)[::-1]
     samples = [samples[i] for i in ranks]
     weights = [weights[i] for i in ranks]
+    # transform weights based on weight method
+    weights_miss = transform_weights(weights, weight_method_miss)
+    weights_hit = transform_weights(weights, weight_method_hit) 
     # perform run length encoding to keep track of ties in weights
     # and transform weights (same as above)
     rle_lengths, rle_weights = rle(weights)
-    rle_weights_miss = transform_weights(rle_weights, weight_methods[0], 
-                                         weight_params)
-    rle_weights_hit = transform_weights(rle_weights, weight_methods[1], 
-                                        weight_params)
+    rle_weights_miss = transform_weights(rle_weights, weight_method_miss)
+    rle_weights_hit = transform_weights(rle_weights, weight_method_hit)
     # convert sample sets to membership vectors
     membership = np.zeros((len(samples),len(sample_sets)), 
                             dtype=BOOL_DTYPE)
@@ -228,61 +242,65 @@ def ssea(samples, weights, sample_sets,
     es_vals, rle_es_inds, rle_es_runs = \
         ssea_kernel(rle_lengths, rle_weights_miss, rle_weights_hit, 
                     membership, perm)
-    # permute samples and determine null distribution of ES
-    es_null = np.zeros((perms,membership.shape[1]), dtype=np.float)
+    # permute samples and determine ES null distribution
+    es_null = np.zeros((perms, len(sample_sets)), dtype=np.float)
     for i in xrange(perms):
-        print i
         np.random.shuffle(perm)
         es_null[i] = ssea_kernel(rle_lengths, rle_weights_miss, 
                                  rle_weights_hit, membership, perm)[0]      
     # decode run length encoding
-    es_run_inds = [sum(rle_lengths[:x+1]) for x in rle_es_inds]
+    es_run_inds = [sum(rle_lengths[:x]) for x in rle_es_inds]
     es_runs = rld2d(rle_lengths, rle_es_runs)
+    # default containers for results
+    nes_vals = np.zeros(membership.shape[1], dtype=np.float)
+    pvals = np.ones(membership.shape[1], dtype=np.float)
     # separate the positive and negative sides of the null distribution
     # based on the observed enrichment scores
     es_neg_inds = (es_vals < 0).nonzero()[0]
+    if len(es_neg_inds) > 0:
+        # mask positive scores 
+        es_null_neg = np.ma.masked_greater_equal(es_null[:,es_neg_inds], 0)
+        # Adjust for variation in gene set size. Normalize ES(S,null)
+        # and the observed ES(S), separately rescaling the positive and
+        # negative scores by dividing by the mean of the ES(S,null) to
+        # yield normalized scores NES(S,null)
+        es_null_neg_means = es_null_neg.mean(axis=0)
+        nes_null_neg = es_null_neg / np.fabs(es_null_neg_means)
+        nes_null_neg_count = nes_null_neg.count()
+        # To compute FWER create a histogram of the maximum NES(S,null) 
+        # over all S for each of the permutations by using the positive 
+        # or negative values corresponding to the sign of the observed NES(S). 
+        nes_null_min = nes_null_neg.min(axis=1).compressed()
+        # Normalize the observed ES(S) by rescaling by the mean of
+        # the ES(S,null) separately for positive and negative ES(S)
+        nes_obs_neg = es_vals[es_neg_inds] / np.fabs(es_null_neg_means) 
+        nes_vals[es_neg_inds] = nes_obs_neg
+        # estimate nominal p value for S from ES(S,null) by using the
+        # positive or negative portion of the distribution corresponding
+        # to the sign of the observed ES(S)
+        pneg = (es_null_neg <= es_vals[es_neg_inds]).sum(axis=0)
+        pneg = pneg / (es_null_neg.count(axis=0).astype(float))    
+        pvals[es_neg_inds] = pneg
+    # do the same for the positive enrichment scores (see above for
+    # detailed comments
     es_pos_inds = (es_vals >= 0).nonzero()[0]
-    es_null_neg = np.ma.masked_greater_equal(es_null[:,es_neg_inds], 0)
-    es_null_neg_means = es_null_neg.mean(axis=0)
-    es_null_pos = np.ma.masked_less(es_null[:,es_pos_inds], 0)
-    es_null_pos_means = es_null_pos.mean(axis=0)    
-    # Adjust for variation in gene set size. Normalize ES(S,null)
-    # and the observed ES(S), separately rescaling the positive and
-    # negative scores by dividing by the mean of the ES(S,null) to
-    # yield normalized scores NES(S,null)
-    nes_null_neg = es_null_neg / np.fabs(es_null_neg_means)
-    nes_null_pos = es_null_pos / np.fabs(es_null_pos_means)
-    nes_null_neg_count = nes_null_neg.count()
-    nes_null_pos_count = nes_null_neg.count()
-    # To compute FWER create a histogram of the maximum NES(S,null) 
-    # over all S for each of the permutations by using the positive 
-    # or negative values corresponding to the sign of the observed NES(S). 
-    nes_null_min = nes_null_neg.min(axis=1).compressed()
-    nes_null_max = nes_null_pos.max(axis=1).compressed()
-    # Normalize the observed ES(S) by rescaling by the mean of
-    # the ES(S,null) separately for positive and negative ES(S)
-    nes_obs_neg = es_vals[es_neg_inds] / np.fabs(es_null_neg_means) 
-    nes_obs_pos = es_vals[es_pos_inds] / np.fabs(es_null_pos_means) 
-    nes_vals = np.ones(membership.shape[1], dtype=np.float) 
-    nes_vals[es_neg_inds] = nes_obs_neg
-    nes_vals[es_pos_inds] = nes_obs_pos
-    # estimate nominal p value for S from ES(S,null) by using the
-    # positive or negative portion of the distribution corresponding
-    # to the sign of the observed ES(S)
-    pneg = (es_null_neg <= es_vals[es_neg_inds]).sum(axis=0)
-    pneg = pneg / (es_null_neg.count(axis=0).astype(float))
-    ppos = (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
-    ppos = ppos / (es_null_pos.count(axis=0).astype(np.float))
-    pvals = np.ones(membership.shape[1], dtype=np.float) 
-    pvals[es_neg_inds] = pneg
-    pvals[es_pos_inds] = ppos
+    if len(es_pos_inds) > 0:
+        # mask negative scores 
+        es_null_pos = np.ma.masked_less(es_null[:,es_pos_inds], 0)
+        # normalize
+        es_null_pos_means = es_null_pos.mean(axis=0)    
+        nes_null_pos = es_null_pos / np.fabs(es_null_pos_means)
+        nes_null_pos_count = nes_null_pos.count()
+        # store max NES for FWER calculation
+        nes_null_max = nes_null_pos.max(axis=1).compressed()
+        nes_obs_pos = es_vals[es_pos_inds] / np.fabs(es_null_pos_means) 
+        nes_vals[es_pos_inds] = nes_obs_pos
+        # estimate p values
+        ppos = (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
+        ppos = ppos / (es_null_pos.count(axis=0).astype(np.float))
+        pvals[es_pos_inds] = ppos
     # Control for multiple hypothesis testing and summarize results
     results = []
-    # transform weights based on weight method
-    weights_miss = transform_weights(weights, weight_methods[0], 
-                                     weight_params)
-    weights_hit = transform_weights(weights, weight_methods[1], 
-                                    weight_params)    
     for j in xrange(membership.shape[1]):
         # For a given NES(S) = NES* >= 0, the FDR is the ratio of the 
         # percentage of all permutations NES(S,null) >= 0, whose 
@@ -315,6 +333,7 @@ def ssea(samples, weights, sample_sets,
         res.fwer = fwer
         res.es_null = es_null[:,j]
         res.samples = samples
+        res.weights = weights
         res.membership = membership[:,j]
         res.weights_miss = weights_miss
         res.weights_hit = weights_hit

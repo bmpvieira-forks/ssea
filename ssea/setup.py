@@ -3,7 +3,6 @@ Created on Oct 9, 2013
 
 @author: mkiyer
 '''
-import os
 from distutils.core import setup
 from distutils.extension import Extension
 from Cython.Build import cythonize
@@ -12,7 +11,7 @@ from Cython.Build import cythonize
 import numpy
 numpy_inc = numpy.get_include()
 
-ext_modules = [Extension('src.kernel', ["src/kernel.pyx"], include_dirs=[numpy_inc])] 
+ext_modules = [Extension('ssea.kernel', ["ssea/kernel.pyx"], include_dirs=[numpy_inc])] 
 
 setup(
   name = 'SSEA',
