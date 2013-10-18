@@ -23,6 +23,7 @@ import sys
 import os
 import argparse
 import logging
+import shutil
 from time import time
 from datetime import datetime
 import json
@@ -32,13 +33,17 @@ import matplotlib.pyplot as plt
 from jinja2 import Environment, PackageLoader
 env = Environment(loader=PackageLoader("ssea", "templates"))
 
-# local imports
-from algo import ssea, SampleSet, WEIGHT_METHODS
+# setup path to web files
+import ssea as _ssea
+src_web_path = os.path.join(_ssea.__path__[0], 'web')
+
+# import main function
+from ssea.algo import ssea_run, SampleSet, WEIGHT_METHODS
 
 __all__ = []
 __version__ = 0.1
 __date__ = '2013-10-09'
-__updated__ = '2013-10-09'
+__updated__ = '2013-10-18'
 
 DEBUG = 1
 TESTRUN = 0
@@ -139,7 +144,7 @@ def main(argv=None):
     program_name = os.path.basename(sys.argv[0])
     program_version = "v%s" % __version__
     program_build_date = str(__updated__)
-    program_version_message = '%%(prog)s %s (%s)' % (program_version, program_build_date)
+    program_version_message = '%s %s (%s)' % (program_name, program_version, program_build_date)
     program_shortdesc = __import__('__main__').__doc__.split("\n")[1]
     program_license = '''%s
 
@@ -227,13 +232,18 @@ USAGE
         logging.info("\tplot conf interval: %s" % (args.plot_conf_int))
         logging.info("\tconf interval:      %f" % (args.conf_int))
         logging.info("Running SSEA")
-        results = ssea(samples, weights, sample_sets, 
-                       weight_method_miss=args.weight_miss,
-                       weight_method_hit=args.weight_hit,
-                       perms=perms)
+        results = ssea_run(samples, weights, sample_sets, 
+                           weight_method_miss=args.weight_miss,
+                           weight_method_hit=args.weight_hit,
+                           perms=perms)
+        # setup output directory
         if not os.path.exists(output_dir):
             logging.info("Creating output directory '%s'" % (output_dir))
             os.makedirs(output_dir)
+        web_dir = os.path.join(output_dir, 'web')
+        if not os.path.exists(web_dir):
+            logging.info("\tInstalling web files")
+            shutil.copytree(src_web_path, web_dir)        
         logging.info("Writing output")
         json_data = []
         for res in results:
@@ -259,19 +269,20 @@ USAGE
                       'eplot_pdf': enrichment_pdf,
                       'null_png': null_png,
                       'null_pdf': null_pdf})
-            details_filename = '%s.%s.json' % (name, res.sample_set.name)
-            fp = open(os.path.join(output_dir, details_filename), 'w')
+            details_json = '%s.%s.json' % (name, res.sample_set.name)
+            fp = open(os.path.join(output_dir, details_json), 'w')
             json.dump(d, fp)
             fp.close()
             # render to html
-            t = env.get_template('detailedreport.html')
-            html_filename = '%s.%s.html' % (name, res.sample_set.name)
-            fp = open(os.path.join(output_dir, html_filename), 'w')
+            t = env.get_template('details.html')
+            details_html = '%s.%s.html' % (name, res.sample_set.name)
+            fp = open(os.path.join(output_dir, details_html), 'w')
             print >>fp, t.render(name=name,data=d)
             fp.close()
             # delete details and save overview stats
             del d['details'] 
-            d['details'] = details_filename
+            d['details_json'] = details_json
+            d['details_html'] = details_html
             json_data.append(d)
         # write main json file
         json_data = {'name': name,
@@ -283,6 +294,12 @@ USAGE
         report_filename = '%s.json' % (name)
         fp = open(os.path.join(output_dir, report_filename), 'w')              
         json.dump(json_data, fp, indent=2, sort_keys=True)
+        fp.close()
+        # render to html
+        t = env.get_template('report.html')
+        html_filename = '%s.html' % (name)
+        fp = open(os.path.join(output_dir, html_filename), 'w')
+        print >>fp, t.render(data=json_data)
         fp.close()
     except KeyboardInterrupt:
         ### handle keyboard interrupt ###

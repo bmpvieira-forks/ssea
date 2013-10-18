@@ -216,10 +216,10 @@ class SampleSetResult(object):
         return d
 
 
-def ssea(samples, weights, sample_sets, 
-         weight_method_miss='unweighted',
-         weight_method_hit='unweighted',
-         perms=10000):
+def ssea_run(samples, weights, sample_sets, 
+             weight_method_miss='unweighted',
+             weight_method_hit='unweighted',
+             perms=10000):
     # rank order the N samples in D to form L={s1...sn} 
     ranks = np.argsort(weights)[::-1]
     samples = [samples[i] for i in ranks]
