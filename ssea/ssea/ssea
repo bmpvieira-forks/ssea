@@ -15,35 +15,19 @@ Assessment of enrichment in a ranked list of quantitative measurements
 @contact:    mkiyer@umich.edu
 @deffield    updated: Updated
 '''
-# set matplotlib backend
-import matplotlib
-matplotlib.use('Agg')
-
 import sys
 import os
 import argparse
 import logging
 import shutil
-import json
-import matplotlib.pyplot as plt
 
-# setup html template environment
-from jinja2 import Environment, PackageLoader
-env = Environment(loader=PackageLoader("ssea", "templates"))
-
-# setup path to web files
-import ssea as _ssea
-src_web_path = os.path.join(_ssea.__path__[0], 'web')
+from ssea import __version__, __date__, __updated__
+__all__ = []
 
 # local imports
 from ssea.config import Config
 from ssea.base import SampleSet, WeightMatrix
 from ssea.algo import ssea_run 
-
-__all__ = []
-__version__ = 0.1
-__date__ = '2013-10-09'
-__updated__ = '2013-10-18'
 
 DEBUG = 1
 TESTRUN = 0
@@ -59,87 +43,6 @@ class CLIError(Exception):
     def __unicode__(self):
         return self.msg
 
-def report_config(config):
-    # write main json file
-    json_data = {'name': args.name,
-                 'prog': program_version_message,
-                 'perms': perms,
-                 'weight_method_miss': args.weight_miss,
-                 'weight_method_hit': args.weight_hit,
-                 'results': json_data}
-    pass
-
-def report_single_test(wobj, res, config):
-    eplot_png = '%s.%s.eplot.png' % (wobj.name, res.sample_set.name)
-    eplot_pdf = '%s.%s.eplot.pdf' % (wobj.name, res.sample_set.name)
-    null_png = '%s.%s.null.png' % (wobj.name, res.sample_set.name)
-    null_pdf = '%s.%s.null.pdf' % (wobj.name, res.sample_set.name)            
-    details_json = '%s.%s.json' % (wobj.name, res.sample_set.name)
-    details_html = '%s.%s.html' % (wobj.name, res.sample_set.name)
-    # create enrichment plot
-    fig = res.plot(plot_conf_int=config.plot_conf_int,
-                   conf_int=config.conf_int)
-    fig.savefig(os.path.join(config.output_dir, eplot_png))
-    fig.savefig(os.path.join(config.output_dir, eplot_pdf))
-    plt.close()
-    # create null distribution plot
-    fig = res.plot_null_distribution()
-    fig.savefig(os.path.join(config.output_dir, null_png))
-    fig.savefig(os.path.join(config.output_dir, null_pdf))
-    plt.close()
-    # create detailed report
-    reportdict = res.get_report_json()
-    detailsdict = res.get_details_json()
-    detailsdict.update({'eplot_png': eplot_png,
-                        'eplot_pdf': eplot_pdf,
-                        'null_png': null_png,
-                        'null_pdf': null_pdf})
-    fp = open(os.path.join(config.output_dir, details_json), 'w')
-    json.dump(detailsdict, fp)
-    fp.close()
-    # render to html
-    t = env.get_template('details.html')
-    fp = open(os.path.join(config.output_dir, details_html), 'w')
-    print >>fp, t.render(name=wobj.name, 
-                         desc=wobj.desc,
-                         report=reportdict,
-                         details=detailsdict)
-    fp.close()
-    # update report dict
-    reportdict['details_json'] = details_json
-    reportdict['details_html'] = details_html
-    return reportdict
-
-def report_single_observation(wobj, results, config):
-    # create detailed reports
-    jsondict = {'name': wobj.name,
-                'desc': wobj.desc}
-    reports = []
-    for res in results:
-        reports.append(report_single_test(wobj, res, config))
-    jsondict['reports'] = reports
-    # create observation report
-    report_json = '%s.json' % (wobj.name)
-    fp = open(os.path.join(config.output_dir, report_json), 'w')              
-    json.dump(jsondict, fp, indent=2, sort_keys=True)
-    fp.close()
-    # render to html
-    report_html = '%s.html' % (wobj.name)
-    t = env.get_template('report.html')
-    fp = open(os.path.join(config.output_dir, report_html), 'w')
-    print >>fp, t.render(data=jsondict)
-    fp.close()
-    # update report dict
-    jsondict['report_json'] = report_json
-    jsondict['report_html'] = report_html    
-    return jsondict
-
-def report_meta_sample_set():
-    pass
-
-def report_meta_all():
-    pass
-
 def ssea_main(config):
     # read sample sets
     logging.info("Reading sample sets")
@@ -151,14 +54,28 @@ def ssea_main(config):
         logging.debug("\tFile: %s" % (filename))
         sample_sets.extend(SampleSet.parse_smt(filename))
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
+    filtered_sample_sets = []
+    for sample_set in sample_sets:
+        if ((config.sample_set_size_min > 0) and
+            (len(sample_set.value) < config.sample_set_size_min)):
+            logging.info("\tsample set %s excluded because size %d < %d" %                              
+                         (sample_set.name, len(sample_set.value), 
+                          config.sample_set_size_min))
+            continue        
+        if ((config.sample_set_size_max > 0) and 
+            (len(sample_set.value) > config.sample_set_size_max)):
+            logging.info("\tsample set %s excluded because size %d > %d" % 
+                         (sample_set.name, len(sample_set.value), 
+                          config.sample_set_size_max))
+            continue
+        filtered_sample_sets.append(sample_set)
+    logging.info("\tNumber of filtered sample sets: %d" % (len(filtered_sample_sets)))
+    sample_sets = filtered_sample_sets
     # setup output directory
     if not os.path.exists(config.output_dir):
-        logging.info("Creating output directory '%s'" % (config.output_dir))
+        logging.info("Creating output directory '%s'" % 
+                     (config.output_dir))
         os.makedirs(config.output_dir)
-    web_dir = os.path.join(config.output_dir, 'web')
-    if not os.path.exists(web_dir):
-        logging.info("\tInstalling web files")
-        shutil.copytree(src_web_path, web_dir)        
     # parse weight matrix and run main ssea algorithm
     logging.info("Running SSEA")
     for wobj in WeightMatrix.parse_wmt(config.weight_matrix_file):
@@ -167,7 +84,7 @@ def ssea_main(config):
                            weight_method_miss=config.weight_miss,
                            weight_method_hit=config.weight_hit,
                            perms=config.perms)
-        report_single_observation(wobj, results, config)
+
 
 def main(argv=None):
     '''Command line options.'''    
@@ -197,6 +114,7 @@ USAGE
 
     # create instance of run configuration
     config = Config()
+    config.version = program_version_message
     try:
         # Setup argument parser
         parser = argparse.ArgumentParser(description=program_license)

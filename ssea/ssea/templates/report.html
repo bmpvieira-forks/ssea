@@ -27,7 +27,7 @@ $(document).ready(function() {
 
 SSEA Report
 <br/>
-Enrichment of observation {{ data['name'] }} ({{ data['desc'] }}) across sample sets
+Enrichment of observation {{ data['wname'] }} ({{ data['wdesc'] }}) across sample sets
 <br/><br/>
 
 <table id="report" class="tablesorter" border="0" cellpadding="0" cellspacing="1">
@@ -49,21 +49,25 @@ Enrichment of observation {{ data['name'] }} ({{ data['desc'] }}) across sample 
 </tr>
 </thead>
 <tbody>
-{% for report in data['reports'] %}
+{% for result in data['results'] %}
 <tr>
 <td>{{ loop.index }}</td>
-<td><a href="{{ report['details_html'] }}">Details</td>
-<td>{{ report['name'] }}</td>
-<td>{{ report['desc'] }}</td>
-<td>{{ report['size'] }}</td>
-<td>{{ report['es'] }}</td>
-<td>{{ report['nes'] }}</td>
-<td>{{ report['pval'] }}</td>
-<td>{{ report['qval'] }}</td>
-<td>{{ report['fwerp'] }}</td>
-<td>{{ report['rank_at_max'] }}</td>
-<td>{{ report['leading_edge_size'] }}</td>
-<td>{{ 100.0 * report['leading_edge_size'] / report['size'] }}%</td>
+<td>
+{% if result['details_html'] is not none %}
+  <a href="{{ result['details_html'] }}">Details</a>
+{% endif %}
+</td>
+<td>{{ result['name'] }}</td>
+<td>{{ result['desc'] }}</td>
+<td>{{ result['size'] }}</td>
+<td>{{ result['es'] }}</td>
+<td>{{ result['nes'] }}</td>
+<td>{{ result['pval'] }}</td>
+<td>{{ result['qval'] }}</td>
+<td>{{ result['fwerp'] }}</td>
+<td>{{ result['rank_at_max'] }}</td>
+<td>{{ result['leading_edge_size'] }}</td>
+<td>{{ 100.0 * result['leading_edge_size'] / result['size'] }}%</td>
 </tr>
 {% endfor %}
 </tbody>

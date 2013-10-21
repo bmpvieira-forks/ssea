@@ -175,10 +175,7 @@ class SampleSetResult(object):
         # draw
         fig.tight_layout()
         return fig
-
-    def get_details_header(self):
-        return 
-        
+       
     def get_details_json(self):
         details = {'header': ['index', 'sample', 'rank', 'weight', 
                               'running_es', 'core_enrichment']}

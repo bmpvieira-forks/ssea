@@ -1,12 +1,31 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us">
+<head>
+	<title>Configuration for analysis {{ config['name'] }}</title>
+
+	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
+</head>
+
+<body>
+
 <table class="gridtable">
 <thead>
-<tr><th>Program parameter</th><th>Value</th></tr>
+<tr><th>Program configuration</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td>Name</td><td>{{ data['name'] }}</td></tr>
-<tr><td>Version</td><td>{{ data['prog'] }}</td></tr>
-<tr><td>Permutations</td><td>{{ data['perms'] }}</td></tr>
-<tr><td>Weight method for misses</td><td>{{ data['weight_method_miss'] }}</td></tr>
-<tr><td>Weight method for hits</td><td>{{ data['weight_method_hit'] }}</td></tr>
+<tr><td>Name</td><td>{{ config['name'] }}</td></tr>
+<tr><td>Version</td><td>{{ config['version'] }}</td></tr>
+<tr><td>Permutations</td><td>{{ config['perms'] }}</td></tr>
+<tr><td>Weight method for misses</td><td>{{ config['weight_miss'] }}</td></tr>
+<tr><td>Weight method for hits</td><td>{{ config['weight_hit'] }}</td></tr>
+<tr><td>FDR q-value threshold for reports</td><td>{{ config['fdr_qval_threshold'] }}</td></tr>
+<tr><td>Plot confidence interval</td><td>{{ config['plot_conf_int'] }}</td></tr>
+<tr><td>Confidence interval level</td><td>{{ config['conf_int'] }}</td></tr>
+<tr><td>Sample set files</td><td>{{ ','.join(config['smx_files'] + config['smt_files']) }}</td></tr>
+<tr><td>Weight matrix file</td><td>{{ config['weight_matrix_file'] }}</td></tr>
+<tr><td>Output directory</td><td>{{ config['output_dir'] }}</td></tr>
 </tbody>
 </table>
+
+</body>
+</html>        

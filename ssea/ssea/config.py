@@ -10,6 +10,7 @@ from datetime import datetime
 from time import time
 
 # local imports
+from ssea import __version__
 from base import WEIGHT_METHODS
 
 def timestamp():
@@ -17,11 +18,15 @@ def timestamp():
 
 class Config(object):
     def __init__(self):
+        self.version = __version__
         self.weight_miss = 'weighted'
         self.weight_hit = 'weighted'
         self.perms = 1000
+        self.fdr_qval_threshold = 0.05
         self.plot_conf_int = True
         self.conf_int = 0.95
+        self.sample_set_size_min = 5
+        self.sample_set_size_max = 0
         self.smx_files = []
         self.smt_files = []
         self.weight_matrix_file = None
@@ -45,6 +50,11 @@ class Config(object):
         grp.add_argument('--perms', type=int, default=self.perms,
                          help='Number of permutations '
                          '[default=%(default)s]')
+        grp.add_argument('--fdr-threshold', type=float,
+                         dest="fdr_qval_threshold",
+                         default=self.fdr_qval_threshold,
+                         help='FDR q-value threshold for generating '
+                         'reports [default=%(default)s]')
         grp.add_argument('--no-plot-conf-int', dest="plot_conf_int", 
                          action="store_false", default=self.plot_conf_int,
                          help='Do not show confidence intervals in '
@@ -52,7 +62,15 @@ class Config(object):
         grp.add_argument('--conf-int', dest="conf_int", type=float, 
                          default=self.conf_int,
                          help='Confidence interval level '
-                         '[default=%(default)s]')        
+                         '[default=%(default)s]')
+        grp.add_argument('--smin', dest="sample_set_size_min", type=int,
+                         default=self.sample_set_size_min, metavar="N",
+                         help='Exclude sample sets smaller than N '
+                         'from the analysis')
+        grp.add_argument('--smax', dest="sample_set_size_max", type=int,
+                         default=self.sample_set_size_max, metavar="N",
+                         help='Exclude sample sets larger than N '
+                         'from the analysis')
         grp.add_argument('--smx', dest="smx_files", action='append',
                          help='File(s) containing sets in column format')
         grp.add_argument('--smt', dest="smt_files", action='append',
@@ -68,25 +86,48 @@ class Config(object):
     def log(self, log_func=logging.info):
         log_func("Parameters")
         log_func("----------------------------------")
-        log_func("\tname:               %s" % (self.name))
-        log_func("\tpermutations:       %d" % (self.perms))
-        log_func("\tweight method miss: %s" % (self.weight_miss))
-        log_func("\tweight method hit:  %s" % (self.weight_hit))
-        log_func("\tplot conf interval: %s" % (self.plot_conf_int))
-        log_func("\tconf interval:      %f" % (self.conf_int))
-        log_func("\tsmx files:          %s" % (len(self.smx_files)))
-        log_func("\tsmt files:          %s" % (len(self.smt_files)))
-        log_func("\tweight matrix file: %s" % (self.weight_matrix_file))
-        log_func("\toutput directory:   %s" % (self.output_dir))
+        log_func("\tname:                  %s" % (self.name))
+        log_func("\tpermutations:          %d" % (self.perms))
+        log_func("\tweight method miss:    %s" % (self.weight_miss))
+        log_func("\tweight method hit:     %s" % (self.weight_hit))
+        log_func("\tfdr q-value threshold: %f" % (self.fdr_qval_threshold))
+        log_func("\tplot conf interval:    %s" % (self.plot_conf_int))
+        log_func("\tconf interval:         %f" % (self.conf_int))
+        log_func("\tsample set size min:   %d" % (self.sample_set_size_min))
+        log_func("\tsample set size max:   %d" % (self.sample_set_size_max))
+        log_func("\tsmx files:             %s" % (','.join(self.smx_files)))
+        log_func("\tsmt files:             %s" % (','.join(self.smt_files)))
+        log_func("\tweight matrix file:    %s" % (self.weight_matrix_file))
+        log_func("\toutput directory:      %s" % (self.output_dir))
         log_func("----------------------------------")
+
+    def get_json(self):
+        d = {'name': self.name,
+             'version': self.version,
+             'perms': self.perms,
+             'weight_miss': self.weight_miss,
+             'weight_hit': self.weight_hit,
+             'fdr_qval_threshold': self.fdr_qval_threshold,
+             'plot_conf_int': self.plot_conf_int,
+             'conf_int': self.conf_int,
+             'sample_set_size_min': self.sample_set_size_min,
+             'sample_set_size_max': self.sample_set_size_max,
+             'smx_files': self.smx_files,
+             'smt_files': self.smt_files,
+             'weight_matrix_file': self.weight_matrix_file,
+             'output_dir': self.output_dir}
+        return d
 
     def parse_args(self, parser, args):
         # process and check arguments
         self.perms = max(1, args.perms)
         self.weight_miss = args.weight_miss
         self.weight_hit = args.weight_hit
+        self.fdr_qval_threshold = args.fdr_qval_threshold
         self.plot_conf_int = args.plot_conf_int
         self.conf_int = args.conf_int
+        self.sample_set_size_min = args.sample_set_size_min
+        self.sample_set_size_max = args.sample_set_size_max
         self.name = args.name
         # output directory
         self.output_dir = args.output_dir

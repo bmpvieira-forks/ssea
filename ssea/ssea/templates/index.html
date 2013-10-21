@@ -1,0 +1,43 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us">
+<head>
+	<title>SSEA Analysis {{ configdict['name'] }}</title>
+
+	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
+	<link rel="stylesheet" href="web/tablesorterblue.css" type="text/css" media="print, projection, screen" />
+	<script type="text/javascript" src="web/jquery-latest.js"></script>
+	<script type="text/javascript" src="web/jquery.tablesorter.js"></script>
+	<script type="text/javascript" src="web/jquery.metadata.js"></script>	
+
+    <script type="text/javascript" id="js">
+$(document).ready(function() { 
+    $("table").tablesorter({ 
+        // pass the headers argument 
+        headers: { 
+            // disable links column and details column 
+            1: { sorter: false },
+            3: { sorter: false }
+        } 
+    }); 
+});
+	</script>
+</head>
+
+<body>
+
+SSEA Analysis {{ configdict['name'] }}
+<br/>
+<a href="{{ configdict['config_html'] }}">Configuration</a>
+<br/>
+<a href="{{ meta_report_html }}">Meta report</a>
+<br/>
+Sample Set Reports
+<br/>
+{% for k,v in sample_set_html_dict.iteritems() %}
+<a href="{{ v }}">{{ k }}</a>
+<br/>
+{% endfor %}
+<br/>
+
+</body>
+</html>

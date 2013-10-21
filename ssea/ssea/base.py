@@ -3,7 +3,6 @@ Created on Oct 18, 2013
 
 @author: mkiyer
 '''
-import itertools
 import numpy as np
 
 BOOL_DTYPE = np.uint8
@@ -34,8 +33,8 @@ class SampleSet(object):
     @staticmethod
     def parse_smx(filename):
         fileh = open(filename)
-        names = fileh.next().strip().split('\t')
-        descs = fileh.next().strip().split('\t')
+        names = fileh.next().rstrip('\n').split('\t')
+        descs = fileh.next().rstrip('\n').split('\t')
         if len(names) != len(descs):
             raise ParserError("Number of fields in differ in columns 1 and 2 of sample set file")
         sample_sets = [SampleSet(name=n,desc=d,value=set()) for n,d in zip(names,descs)]
@@ -43,7 +42,7 @@ class SampleSet(object):
         for line in fileh:
             if not line:
                 continue
-            line = line.strip()
+            line = line.rstrip('\n')
             if not line:
                 continue
             fields = line.split('\t')

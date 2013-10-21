@@ -1,0 +1,90 @@
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us">
+<head>
+	<title>SSEA Analysis {{ name }}</title>
+
+	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
+	<link rel="stylesheet" href="web/tablesorterblue.css" type="text/css" media="print, projection, screen" />
+	<script type="text/javascript" src="web/jquery-latest.js"></script>
+	<script type="text/javascript" src="web/jquery.tablesorter.js"></script>
+	<script type="text/javascript" src="web/jquery.metadata.js"></script>	
+
+    <script type="text/javascript" id="js">
+$(document).ready(function() { 
+    $("table").tablesorter({ 
+        // pass the headers argument 
+        headers: { 
+            // disable links column and details column 
+            1: { sorter: false },
+            3: { sorter: false },
+            4: { sorter: false }
+        } 
+    }); 
+});
+	</script>
+</head>
+
+<body>
+
+SSEA Analysis {{ name }}
+
+<br/>
+{% if filter is not none %}
+Filtering for sample set {{ filter }}
+{% endif %}  
+<br/><br/>
+
+<table id="metareport" class="tablesorter" border="0" cellpadding="0" cellspacing="1">
+<thead>
+<tr>
+<th>Name</th>
+<th>Description</th>
+<th>Sample Set</th>
+<th>Sample Set Description</th>
+<th>Link</th>
+<th>Size</th>
+<th>ES</th>
+<th>NES</th>
+<th>NOM p-val</th>
+<th>FDR q-val</th>
+<th>FWER p-val</th>
+<th>Rank at max</th>
+<th>Leading edge size</th>
+<th>Leading edge percent</th>
+</tr>
+</thead>
+<tbody>
+
+{% for reportdict in reportdicts %}
+  {%- for resultdict in reportdict['results'] %}
+  {%- if (filter is not none) and (filter != resultdict['name']) %}
+  {%- continue %}
+  {%- endif %}
+  <tr>
+  <td><a href="{{ reportdict['report_html'] }}">{{ reportdict['wname'] }}</a></td>
+  <td>{{ reportdict['wdesc'] }}</td>
+  <td>{{ resultdict['name'] }}</td>
+  <td>{{ resultdict['desc'] }}</td>
+  <td>
+  {%- if resultdict['details_html'] is not none %}
+  <a href="{{ resultdict['details_html'] }}">Details</a>
+  {%- endif %}
+  </td>
+  <td>{{ resultdict['size'] }}</td>
+  <td>{{ resultdict['es'] }}</td>
+  <td>{{ resultdict['nes'] }}</td>
+  <td>{{ resultdict['pval'] }}</td>
+  <td>{{ resultdict['qval'] }}</td>
+  <td>{{ resultdict['fwerp'] }}</td>
+  <td>{{ resultdict['rank_at_max'] }}</td>
+  <td>{{ resultdict['leading_edge_size'] }}</td>
+  <td>{{ 100.0 * resultdict['leading_edge_size'] / resultdict['size'] }}%</td>
+  </tr>
+  {% endfor %}
+{% endfor %}
+
+</tbody>
+</table>
+
+</body>
+</html>
