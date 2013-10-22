@@ -25,7 +25,10 @@ class SampleSet(object):
         self.name = name
         self.desc = desc
         self.value = value
-        
+    
+    def __len__(self):
+        return 0 if self.value is None else len(self.value)
+
     def get_array(self, samples):
         return np.array([x in self.value for x in samples], 
                         dtype=BOOL_DTYPE)

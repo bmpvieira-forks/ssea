@@ -3,10 +3,6 @@ Created on Oct 9, 2013
 
 @author: mkiyer
 '''
-# set matplotlib backend
-import matplotlib
-matplotlib.use('Agg')
-
 from itertools import groupby
 import numpy as np
 import matplotlib.pyplot as plt 
@@ -152,6 +148,7 @@ class SampleSetResult(object):
             else:
                 ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
                                  lw=0, facecolor='blue', alpha=0.5)
+        ax0.set_xlim((0,len(self.es_run)))
         ax0.grid(True)
         ax0.set_xticklabels([])
         ax0.set_ylabel('Enrichment score (ES)')
@@ -170,13 +167,14 @@ class SampleSetResult(object):
         ax2 = plt.subplot(gs[2])
         ax2.plot(self.weights_miss, color='blue')
         ax2.plot(self.weights_hit, color='red')
+        ax2.set_xlim((0,len(self.es_run)))
         ax2.set_xlabel('Samples')
         ax2.set_ylabel('Weights')
         # draw
         fig.tight_layout()
         return fig
        
-    def get_details_json(self):
+    def get_details(self):
         details = {'header': ['index', 'sample', 'rank', 'weight', 
                               'running_es', 'core_enrichment']}
         member_inds = (self.membership > 0).nonzero()[0]

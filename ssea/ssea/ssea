@@ -15,19 +15,42 @@ Assessment of enrichment in a ranked list of quantitative measurements
 @contact:    mkiyer@umich.edu
 @deffield    updated: Updated
 '''
+# set matplotlib backend
+import matplotlib
+matplotlib.use('Agg')
+
 import sys
 import os
 import argparse
 import logging
-import shutil
+import json
+import matplotlib.pyplot as plt
 
-from ssea import __version__, __date__, __updated__
 __all__ = []
 
 # local imports
+from ssea import __version__, __date__, __updated__
 from ssea.config import Config
 from ssea.base import SampleSet, WeightMatrix
 from ssea.algo import ssea_run 
+
+# header fields for report
+HEADER_FIELDS = ['observation_name', 
+                 'observation_desc',
+                 'sample_set_name',
+                 'sample_set_desc',
+                 'sample_set_size',
+                 'es',
+                 'nes',
+                 'nominal_p_value',
+                 'fdr_q_value',
+                 'fwer_p_value',
+                 'rank_at_max',
+                 'leading_edge_size',
+                 'leading_edge_sample_set_frac',
+                 'leading_edge_signal',
+                 'leading_edge_noise',
+                 'details']
 
 DEBUG = 1
 TESTRUN = 0
@@ -43,6 +66,38 @@ class CLIError(Exception):
     def __unicode__(self):
         return self.msg
 
+def create_detailed_report(wobj, res, config):
+    # only create detailed report if pvalue less than threshold
+    if res.qval > config.plot_qval_threshold:
+        return None
+    d = res.get_details()
+    # create enrichment plot
+    efig = res.plot(plot_conf_int=config.plot_conf_int,
+                    conf_int=config.conf_int)    
+    # create null distribution plot
+    nfig = res.plot_null_distribution()
+    if config.plot_png:
+        eplot_png = '%s.%s.eplot.png' % (wobj.name, res.sample_set.name)
+        nplot_png = '%s.%s.null.png' % (wobj.name, res.sample_set.name)
+        efig.savefig(os.path.join(config.details_dir, eplot_png))
+        nfig.savefig(os.path.join(config.details_dir, nplot_png))
+        d.update({'eplot_png': eplot_png,
+                  'nplot_png': nplot_png})
+    if config.plot_pdf:
+        eplot_pdf = '%s.%s.eplot.pdf' % (wobj.name, res.sample_set.name)
+        nplot_pdf = '%s.%s.null.pdf' % (wobj.name, res.sample_set.name)
+        efig.savefig(os.path.join(config.details_dir, eplot_pdf))
+        nfig.savefig(os.path.join(config.details_dir, nplot_pdf))
+        d.update({'eplot_pdf': eplot_pdf,
+                  'nplot_pdf': nplot_pdf})
+    plt.close()
+    # write details
+    details_tsv = '%s.%s.tsv' % (wobj.name, res.sample_set.name)
+    fp = open(os.path.join(config.details_dir, details_tsv), 'w')
+    json.dump(d, fp)
+    fp.close()
+    return details_tsv
+
 def ssea_main(config):
     # read sample sets
     logging.info("Reading sample sets")
@@ -56,17 +111,18 @@ def ssea_main(config):
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:
+        logging.debug("\tsample Set %s size %d" % (sample_set.name, len(sample_set)))
         if ((config.sample_set_size_min > 0) and
             (len(sample_set.value) < config.sample_set_size_min)):
-            logging.info("\tsample set %s excluded because size %d < %d" %                              
-                         (sample_set.name, len(sample_set.value), 
-                          config.sample_set_size_min))
+            logging.warning("\tsample set %s excluded because size %d < %d" %                              
+                            (sample_set.name, len(sample_set.value), 
+                             config.sample_set_size_min))
             continue        
         if ((config.sample_set_size_max > 0) and 
             (len(sample_set.value) > config.sample_set_size_max)):
-            logging.info("\tsample set %s excluded because size %d > %d" % 
-                         (sample_set.name, len(sample_set.value), 
-                          config.sample_set_size_max))
+            logging.warning("\tsample set %s excluded because size %d > %d" % 
+                            (sample_set.name, len(sample_set.value), 
+                             config.sample_set_size_max))
             continue
         filtered_sample_sets.append(sample_set)
     logging.info("\tNumber of filtered sample sets: %d" % (len(filtered_sample_sets)))
@@ -76,14 +132,43 @@ def ssea_main(config):
         logging.info("Creating output directory '%s'" % 
                      (config.output_dir))
         os.makedirs(config.output_dir)
+    if not os.path.exists(config.details_dir):
+        logging.debug("\tCreating details directory '%s'" % 
+                      (config.details_dir))
+        os.makedirs(config.details_dir)
     # parse weight matrix and run main ssea algorithm
     logging.info("Running SSEA")
+    fp = open(os.path.join(config.output_dir, 'out.tsv'), 'w')
+    print >>fp, '\t'.join(HEADER_FIELDS)
     for wobj in WeightMatrix.parse_wmt(config.weight_matrix_file):
         logging.info("\tName: %s (%s)" % (wobj.name, wobj.desc))
         results = ssea_run(wobj.samples, wobj.weights, sample_sets, 
                            weight_method_miss=config.weight_miss,
                            weight_method_hit=config.weight_hit,
                            perms=config.perms)
+        for res in results:
+            # create detailed report
+            details = create_detailed_report(wobj, res, config)
+            # calculate leading edge stats
+            member_inds = (res.membership > 0).nonzero()[0]
+            le_size = sum(ind <= res.es_run_ind 
+                          for ind in member_inds)
+            le_frac = float(le_size) / len(res.sample_set)
+            if res.es_run_ind == 0:
+                le_signal = 0.0
+            else:
+                le_signal = float(le_size) / res.es_run_ind
+            le_noise = (float(res.es_run_ind - le_size) / 
+                        (len(wobj.weights) - len(res.sample_set)))
+            # write result to text file            
+            fields = [wobj.name, wobj.desc,
+                      res.sample_set.name, res.sample_set.desc, 
+                      len(res.sample_set), res.es, res.nes, res.pval, 
+                      res.qval, res.fwerp, res.es_run_ind,
+                      le_size, le_frac, le_signal, le_noise, details]
+            print >>fp, '\t'.join(map(str,fields))
+    # output to text file
+    fp.close()
 
 
 def main(argv=None):
@@ -139,7 +224,6 @@ USAGE
         config.log()
         # run
         ssea_main(config)
-
     except KeyboardInterrupt:
         ### handle keyboard interrupt ###
         pass
