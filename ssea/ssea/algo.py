@@ -12,9 +12,6 @@ from matplotlib import figure
 from kernel import ssea_kernel
 from base import BOOL_DTYPE
 
-# matplotlib static figures
-EPLOT_FIG_NUM = 0
-NPLOT_FIG_NUM = 1
 # constant to saturate logarithms of small numbers and prevent log of zero 
 LOG_CONSTANT = 0.1
 
