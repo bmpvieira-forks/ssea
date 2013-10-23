@@ -160,7 +160,8 @@ class SampleSetResult(object):
         ax0.set_title('Enrichment plot: %s' % (self.sample_set.name))
         # membership in sample set
         ax1 = fig.add_subplot(gs[1])
-        ax1.vlines(self.membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
+        ax1.vlines(self.membership.nonzero()[0], ymin=0, ymax=1, lw=0.5, 
+                   color='black', label='Hits')
         ax1.set_xlim((0,len(self.es_run)))
         ax1.set_ylim((0,1))
         ax1.set_xticks([])
@@ -200,9 +201,12 @@ def ssea_run(samples, weights, sample_sets,
     # transform weights based on weight method
     weights_miss = transform_weights(weights, weight_method_miss)
     weights_hit = transform_weights(weights, weight_method_hit) 
-    # perform run length encoding to keep track of ties in weights
-    # and transform weights (same as above)
+    # perform run length encoding to handle ties in weights
     rle_lengths, rle_weights = rle(weights)
+    # use the absolute value of the run length encoded weights for the
+    # main SSEA calculation
+    rle_weights = np.fabs(rle_weights)
+    # transform weights (same as above)
     rle_weights_miss = transform_weights(rle_weights, weight_method_miss)
     rle_weights_hit = transform_weights(rle_weights, weight_method_hit)
     # convert sample sets to membership vectors
