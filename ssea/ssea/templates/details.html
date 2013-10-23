@@ -1,57 +1,68 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
 <html lang="en">
 <head>
-    <title>Details for enrichment of {{ name }} on sample set {{ report['name'] }}</title>
+	<title>Details for enrichment of {{ res.name }} on sample set {{ res.sample_set_name }}</title>
 
-	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
+	<link rel="stylesheet" href="../web/gridtable.css" type="text/css" media="print, projection, screen" />
 </head>
 
 <body>
 
-SSEA Detailed Report
+<h1>SSEA Detailed Report</h1>
+<h2>Enrichment of {{ res.name }} on sample set {{ res.sample_set_name }}</h2>
 <br/>
-Enrichment of {{ name }} ({{ desc }}) on sample set {{ report['name'] }} ({{ report['desc'] }})
-<br/><br/>
 <table class="gridtable">
 <thead>
-<tr><th>Sample set parameter</th><th>Value</th></tr>
+<tr><th>Parameter</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td>Test name</td><td>{{ name }}</td></tr>
-<tr><td>Test description</td><td>{{ desc }}</td></tr>
-<tr><td>Sample set name</td><td>{{ report['name'] }}</td></tr>
-<tr><td>Sample set description</td><td>{{ report['desc'] }}</td></tr>
-<tr><td>Sample set size</td><td>{{ report['size'] }}</td></tr>
-<tr><td>Enrichment Score (ES)</td><td>{{ report['es'] }}</td></tr>
-<tr><td>Normalized Enrichment Score (ES)</td><td>{{ report['nes'] }}</td></tr>
-<tr><td>Nominal p-value</td><td>{{ report['pval'] }}</td></tr>
-<tr><td>FDR q-value</td><td>{{ report['qval'] }}</td></tr>
-<tr><td>FWER p-value</td><td>{{ report['fwerp'] }}</td></tr>
-<tr><td>Rank at maximum running ES</td><td>{{ report['rank_at_max'] }}</td></tr>
-<tr><td>Leading edge size</td><td>{{ report['leading_edge_size']}}</td></tr>
+<tr><td>Name</td><td>{{ res.name }}</td></tr>
+<tr><td>Description</td><td>{{ res.desc }}</td></tr>
+<tr><td>Sample set name</td><td>{{ res.sample_set_name }}</td></tr>
+<tr><td>Sample set description</td><td>{{ res.sample_set_desc }}</td></tr>
+<tr><td>Sample set size</td><td>{{ res.sample_set_size }}</td></tr>
+<tr><td>Enrichment Score (ES)</td><td>{{ res.es }}</td></tr>
+<tr><td>Normalized Enrichment Score (ES)</td><td>{{ res.nes }}</td></tr>
+<tr><td>Nominal p-value</td><td>{{ res.nominal_p_value }}</td></tr>
+<tr><td>FDR q-value</td><td>{{ res.fdr_q_value }}</td></tr>
+<tr><td>FWER p-value</td><td>{{ res.fwer_p_value }}</td></tr>
+<tr><td>Rank at maximum running ES</td><td>{{ res.rank_at_max }}</td></tr>
+<tr><td>Leading edge num hits</td><td>{{ res.leading_edge_num_hits }}</td></tr>
+<tr><td>Leading edge frac hits</td><td>{{ res.leading_edge_frac_hits }}</td></tr>
+<tr><td>Sample set frac in leading edge</td><td>{{ res.sample_set_frac_in_leading_edge }}</td></tr>
+<tr><td>Null set frac in leading edge</td><td>{{ res.null_set_frac_in_leading_edge }}</td></tr>
 </tbody>
 </table>
 
 <br/><br/>
 
-<img name="enplot_{{ name }}_vs_{{ report['name'] }}" src="{{ details['eplot_png'] }}"/>
-<br/>
-Fig 1: Enrichment plot for {{ report['name'] }}
+{% if 'eplot_png' in files %}
+<img name="enplot_{{ res.name }}_vs_{{ res.sample_set_name }}" src="{{ files.eplot_png }}"/>
+Fig 1: Enrichment plot for {{ res.name }}
 <br/>
 Profile of the running ES score & positions of sample set members in the ordered list
 <br/>
-<a href="{{ details['eplot_pdf'] }}">Download PDF</a>
-<br/><br/><br/>
+{% else %}
+No enrichment plot available
+{% endif %}
 
+{% if 'eplot_pdf' in files %}
+<a href="{{ files.eplot_pdf }}">Download PDF</a>
+{% endif %}
+<br/><br/>
+
+Detailed res
+<br/>
+<a href="{{ files.tsv }}">Download as text</a>
 <table class="gridtable">
 <thead>
-<tr>{% for colname in details['header'] %}<th>{{ colname }}</th>{% endfor %}</tr>
+<tr>{% for colname in details[0] %}<th>{{ colname }}</th>{% endfor %}</tr>
 </thead>
 <tbody>
-{% for row in details['rows'] %}
+{% for row in details[1:] %}
 <tr>
   {% for val in row %}
-    <td>{{ val }}</td>
+  <td>{{ val }}</td>
   {% endfor %}
 </tr>
 {% endfor %}
@@ -60,14 +71,19 @@ Profile of the running ES score & positions of sample set members in the ordered
 
 <br/><br/><br/>
 
-<img name="null_dist_{{ name }}_vs_{{ report['name'] }}" src="{{ details['null_png'] }}"/>
-
+{% if 'nplot_png' in files %}
+<img name="null_dist_{{ res.name }}_vs_{{ res.sample_set_name }}" src="{{ files.nplot_png }}"/>
 <br/>
-Fig 2: Random ES distribution for {{ report['name'] }}
+Fig 2: Random ES distribution for {{ res.sample_set_name }}
 <br/>
-Gene set null distribution of ES for {{ report['name'] }}
+Gene set null distribution of ES for {{ res.sample_set_name }}
+{% else %}
+No null distribution plot available
+{% endif %}
 <br/>
-<a href="{{ details['null_pdf'] }}">Download PDF</a>
+{% if 'nplot_pdf' in files %}
+<a href="{{ files.nplot_pdf }}">Download PDF</a>
+{% endif %}
 
 </body>
 </html>

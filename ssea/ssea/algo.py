@@ -5,14 +5,18 @@ Created on Oct 9, 2013
 '''
 from itertools import groupby
 import numpy as np
-import matplotlib.pyplot as plt 
 import matplotlib.gridspec as gridspec
+from matplotlib import figure
 
 # local imports
 from kernel import ssea_kernel
 from base import BOOL_DTYPE
 
-LOG_TRANSFORM_CONSTANT = 1e-3
+# matplotlib static figures
+EPLOT_FIG_NUM = 0
+NPLOT_FIG_NUM = 1
+# constant to saturate logarithms of small numbers and prevent log of zero 
+LOG_CONSTANT = 0.1
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
@@ -45,12 +49,10 @@ def transform_weights(weights, method):
         return np.array(weights, dtype=np.float)
     elif method == 'log':
         weights = np.array(weights, dtype=np.float)
-        nzweights = weights[weights > 0]
-        if len(nzweights) == 0:
-            const = LOG_TRANSFORM_CONSTANT
-        else:
-            const = max(LOG_TRANSFORM_CONSTANT, nzweights.min())
-        return np.log2(const + weights) - np.log2(const)
+        absweights = np.fabs(weights)
+        const = max(LOG_CONSTANT, absweights.min())
+        return np.sign(weights) * (np.log2(const + absweights) - 
+                                   np.log2(const))
 
 def rle(vals):
     '''run length encoder'''
@@ -99,13 +101,15 @@ class SampleSetResult(object):
         self.weights_miss = None
         self.weights_hit = None
 
-    def plot_null_distribution(self):
+    def plot_null_distribution(self, fig=None):
+        if fig is None:
+            fig = figure.Figure()
+        fig.clf()
         percent_neg = (100. * (self.es_null < 0).sum() / 
                        self.es_null.shape[0])
-        fig = plt.figure()
-        ax = fig.add_subplot(1,1,1)
         num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
+        ax = fig.add_subplot(1,1,1)
         ax.hist(self.es_null, bins=num_bins, histtype='bar')
         ax.axvline(x=self.es, linestyle='--', color='black')
         ax.set_title('Random ES distribution')
@@ -113,12 +117,13 @@ class SampleSetResult(object):
         ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % (percent_neg))
         return fig
 
-    def plot(self, plot_conf_int=True, conf_int=0.95):
-        fig = plt.figure()
-        #fig = plt.figure(figsize=(8, 6)) 
+    def plot(self, plot_conf_int=True, conf_int=0.95, fig=None):
+        if fig is None:
+            fig = figure.Figure()
+        fig.clf()
         gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
         # running enrichment score
-        ax0 = plt.subplot(gs[0])
+        ax0 = fig.add_subplot(gs[0])
         x = np.arange(len(self.es_run))
         y = self.es_run
         ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
@@ -154,7 +159,7 @@ class SampleSetResult(object):
         ax0.set_ylabel('Enrichment score (ES)')
         ax0.set_title('Enrichment plot: %s' % (self.sample_set.name))
         # membership in sample set
-        ax1 = plt.subplot(gs[1])
+        ax1 = fig.add_subplot(gs[1])
         ax1.vlines(self.membership.nonzero()[0], ymin=0, ymax=1, label='Hits')
         ax1.set_xlim((0,len(self.es_run)))
         ax1.set_ylim((0,1))
@@ -164,7 +169,7 @@ class SampleSetResult(object):
         ax1.set_yticklabels([])
         ax1.set_ylabel('Set')
         # weights
-        ax2 = plt.subplot(gs[2])
+        ax2 = fig.add_subplot(gs[2])
         ax2.plot(self.weights_miss, color='blue')
         ax2.plot(self.weights_hit, color='red')
         ax2.set_xlim((0,len(self.es_run)))
@@ -174,36 +179,15 @@ class SampleSetResult(object):
         fig.tight_layout()
         return fig
        
-    def get_details(self):
-        details = {'header': ['index', 'sample', 'rank', 'weight', 
-                              'running_es', 'core_enrichment']}
+    def get_details_table(self):
+        rows = [['index', 'sample', 'rank', 'weight', 'running_es', 
+                 'core_enrichment']]
         member_inds = (self.membership > 0).nonzero()[0]
-        rows = []
         for i,ind in enumerate(member_inds):
             is_enriched = int(ind <= self.es_run_ind)
-            # index, sample, rank, weight, running_es, core
-            row = [i, self.samples[ind], ind+1, self.weights[ind], 
-                   self.es_run[ind], is_enriched]
-            rows.append(row)
-        details['rows'] = rows
-        return details
-
-    def get_report_json(self):
-        member_inds = (self.membership > 0).nonzero()[0]
-        leading_edge_size = sum(ind <= self.es_run_ind 
-                                for ind in member_inds)
-        d = {'name': self.sample_set.name,
-             'desc': self.sample_set.desc,
-             'size': len(self.sample_set.value),
-             'es': self.es,
-             'nes': self.nes,
-             'pval': self.pval,
-             'qval': self.qval,
-             'fwerp': self.fwerp,
-             'rank_at_max': self.es_run_ind,
-             'leading_edge_size': leading_edge_size}
-        return d
-
+            rows.append([i, self.samples[ind], ind+1, self.weights[ind], 
+                         self.es_run[ind], is_enriched])
+        return rows
 
 def ssea_run(samples, weights, sample_sets, 
              weight_method_miss='unweighted',
@@ -262,7 +246,9 @@ def ssea_run(samples, weights, sample_sets,
         nes_null_min = nes_null_neg.min(axis=1).compressed()
         # Normalize the observed ES(S) by rescaling by the mean of
         # the ES(S,null) separately for positive and negative ES(S)
-        nes_obs_neg = es_vals[es_neg_inds] / np.fabs(es_null_neg_means) 
+        nes_obs_neg = (np.ma.MaskedArray(es_vals[es_neg_inds]) / 
+                       np.fabs(es_null_neg_means))
+        nes_obs_neg_count = nes_obs_neg.count()
         nes_vals[es_neg_inds] = nes_obs_neg
         # estimate nominal p value for S from ES(S,null) by using the
         # positive or negative portion of the distribution corresponding
@@ -282,7 +268,9 @@ def ssea_run(samples, weights, sample_sets,
         nes_null_pos_count = nes_null_pos.count()
         # store max NES for FWER calculation
         nes_null_max = nes_null_pos.max(axis=1).compressed()
-        nes_obs_pos = es_vals[es_pos_inds] / np.fabs(es_null_pos_means) 
+        nes_obs_pos = (np.ma.MaskedArray(es_vals[es_pos_inds]) / 
+                       np.fabs(es_null_pos_means))
+        nes_obs_pos_count = nes_obs_pos.count()
         nes_vals[es_pos_inds] = nes_obs_pos
         # estimate p values
         ppos = (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
@@ -303,11 +291,11 @@ def ssea_run(samples, weights, sample_sets,
         nes = nes_vals[j]
         if np.sign(es_vals[j]) < 0:
             n = (nes_null_neg <= nes).sum() / float(nes_null_neg_count)
-            d = (nes_obs_neg <= nes).sum() / float(len(nes_obs_neg))
+            d = (nes_obs_neg <= nes).sum() / float(nes_obs_neg_count)
             fwerp = (nes_null_min <= nes).sum() / float(len(nes_null_min))
         else:
             n = (nes_null_pos >= nes).sum() / float(nes_null_pos_count)
-            d = (nes_obs_pos >= nes).sum() / float(len(nes_obs_pos))
+            d = (nes_obs_pos >= nes).sum() / float(nes_obs_pos_count)
             fwerp = (nes_null_max >= nes).sum() / float(len(nes_null_max))
         qval = n / d
         # create result object

@@ -9,7 +9,6 @@ BOOL_DTYPE = np.uint8
 FLOAT_DTYPE = np.float
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
 
-
 class ParserError(Exception):
     '''Error parsing a file.'''
     def __init__(self, msg):
@@ -70,7 +69,7 @@ class SampleSet(object):
         fileh.close()
         return sample_sets
 
-class WeightMatrix(object):
+class WeightVector(object):
     METADATA_COLS=2
     
     def __init__(self, name=None, desc=None, samples=None, weights=None):
@@ -84,11 +83,11 @@ class WeightMatrix(object):
         '''generator function to parse weight matrix files'''
         fileh = open(filename)
         header_fields = fileh.next().strip().split('\t')
-        samples = header_fields[WeightMatrix.METADATA_COLS:]
+        samples = header_fields[WeightVector.METADATA_COLS:]
         lineno = 2
         for line in fileh:
             fields = line.strip().split('\t')
-            if len(fields[WeightMatrix.METADATA_COLS:]) != len(samples):
+            if len(fields[WeightVector.METADATA_COLS:]) != len(samples):
                 raise ParserError("Number of fields in line %d of weight " 
                                   "matrix file %s does not match number of "
                                   "samples" %
@@ -101,7 +100,7 @@ class WeightMatrix(object):
                 raise ParserError("Values at line number %d cannot be "
                                   "converted to a floating point numbers" 
                                   % (lineno))    
-            yield WeightMatrix(name, desc, samples, weights)
+            yield WeightVector(name, desc, samples, weights)
             lineno += 1
         fileh.close()
 
@@ -137,6 +136,6 @@ class WeightMatrix(object):
         fileh.close()
         wobjs = []
         for i in xrange(len(names)):
-            wobjs.append(WeightMatrix(names[i], descs[i], samples, 
+            wobjs.append(WeightVector(names[i], descs[i], samples, 
                                       weights[i]))
         return wobjs

@@ -1,7 +1,7 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en-us">
 <head>
-	<title>SSEA report for analysis of {{ name }}</title>
+	<title>Report for enrichment of {{ data['name'] }}</title>
 
 	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
 	<link rel="stylesheet" href="web/tablesorterblue.css" type="text/css" media="print, projection, screen" />
@@ -25,55 +25,49 @@ $(document).ready(function() {
 
 <body>
 
-<h1>SSEA report for analysis of {{ name }}</h1>
+SSEA Report
+<br/>
+Enrichment of observation {{ data['wname'] }} ({{ data['wdesc'] }}) across sample sets
+<br/><br/>
 
 <table id="report" class="tablesorter" border="0" cellpadding="0" cellspacing="1">
 <thead>
 <tr>
 <th>Index</th>
-<th>Details</th>
-<th>Name</th>
-<th>Description</th>
+<th>Link</th>
 <th>Sample Set</th>
-<th>Sample Set Description</th>
-<th>Sample Set Size</th>
+<th>Details</th>
+<th>Size</th>
 <th>ES</th>
 <th>NES</th>
 <th>NOM p-val</th>
 <th>FDR q-val</th>
 <th>FWER p-val</th>
-<th>Rank at maximum running ES</th>
-<th>Leading edge hits</th>
-<th>Fraction LE hits</th>
-<th>Fraction set in LE</th>
-<th>Fraction null in LE</th>
+<th>Rank at max</th>
+<th>Leading edge size</th>
+<th>Leading edge percent</th>
 </tr>
 </thead>
-
 <tbody>
-{% for res in results %}
+{% for result in data['results'] %}
 <tr>
 <td>{{ loop.index }}</td>
 <td>
-{% if 'html' in res.details %}
-  <a href="{{ details_dir }}/{{ res.details['html'] }}">Link</a>
+{% if result['details_html'] is not none %}
+  <a href="{{ result['details_html'] }}">Details</a>
 {% endif %}
 </td>
-<td>{{ res.name }}</td>
-<td>{{ res.desc }}</td>
-<td>{{ res.sample_set_name }}</td>
-<td>{{ res.sample_set_desc }}</td>
-<td>{{ res.sample_set_size }}</td>
-<td>{{ res.es }}</td>
-<td>{{ res.nes }}</td>
-<td>{{ res.nominal_p_value }}</td>
-<td>{{ res.fdr_q_value }}</td>
-<td>{{ res.fwer_p_value }}</td>
-<td>{{ res.rank_at_max }}</td>
-<td>{{ res.leading_edge_num_hits }}</td>
-<td>{{ res.leading_edge_frac_hits }}</td>
-<td>{{ res.sample_set_frac_in_leading_edge }}</td>
-<td>{{ res.null_set_frac_in_leading_edge }}</td>
+<td>{{ result['name'] }}</td>
+<td>{{ result['desc'] }}</td>
+<td>{{ result['size'] }}</td>
+<td>{{ result['es'] }}</td>
+<td>{{ result['nes'] }}</td>
+<td>{{ result['pval'] }}</td>
+<td>{{ result['qval'] }}</td>
+<td>{{ result['fwerp'] }}</td>
+<td>{{ result['rank_at_max'] }}</td>
+<td>{{ result['leading_edge_size'] }}</td>
+<td>{{ 100.0 * result['leading_edge_size'] / result['size'] }}%</td>
 </tr>
 {% endfor %}
 </tbody>

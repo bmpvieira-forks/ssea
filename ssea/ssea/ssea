@@ -21,22 +21,37 @@ matplotlib.use('Agg')
 
 import sys
 import os
+import shutil
 import argparse
 import logging
 import json
 import matplotlib.pyplot as plt
+from multiprocessing import Process, JoinableQueue
 
 __all__ = []
 
+DEBUG = 1
+TESTRUN = 0
+PROFILE = 0
+
+# setup path to web files
+import ssea as _ssea
+SRC_WEB_PATH = os.path.join(_ssea.__path__[0], 'web')
+
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.config import Config
-from ssea.base import SampleSet, WeightMatrix
-from ssea.algo import ssea_run 
+from ssea.config import Config, DETAILS_DIR
+from ssea.base import SampleSet, WeightVector
+from ssea.algo import ssea_run
+
+# setup html template environment
+from jinja2 import Environment, PackageLoader
+env = Environment(loader=PackageLoader("ssea", "templates"),
+                  extensions=["jinja2.ext.loopcontrols"])
 
 # header fields for report
-HEADER_FIELDS = ['observation_name', 
-                 'observation_desc',
+REPORT_FIELDS = ['name', 
+                 'desc',
                  'sample_set_name',
                  'sample_set_desc',
                  'sample_set_size',
@@ -46,57 +61,144 @@ HEADER_FIELDS = ['observation_name',
                  'fdr_q_value',
                  'fwer_p_value',
                  'rank_at_max',
-                 'leading_edge_size',
-                 'leading_edge_sample_set_frac',
-                 'leading_edge_signal',
-                 'leading_edge_noise',
+                 'leading_edge_num_hits',
+                 'leading_edge_frac_hits',
+                 'sample_set_frac_in_leading_edge',
+                 'null_set_frac_in_leading_edge',
                  'details']
 
-DEBUG = 1
-TESTRUN = 0
-PROFILE = 1
+# matplotlib static figure
+global_fig = plt.figure(0)
 
-class CLIError(Exception):
-    '''Generic exception to raise and log different fatal errors.'''
-    def __init__(self, msg):
-        super(CLIError).__init__(type(self))
-        self.msg = "ERROR: %s" % msg
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
+def format_result(name, desc, res):
+    # calculate leading edge stats
+    member_inds = (res.membership > 0).nonzero()[0]
+    le_num_hits = sum(ind <= res.es_run_ind 
+                      for ind in member_inds)
+    le_num_misses = res.es_run_ind - le_num_hits
+    num_misses = res.membership.shape[0] - len(res.sample_set)
+    sample_set_frac_le = float(le_num_hits) / len(res.sample_set)
+    null_set_frac_le = float(le_num_misses) / num_misses
+    if res.es_run_ind == 0:
+        le_frac_hits = 0.0
+    else:
+        le_frac_hits = float(le_num_hits) / res.es_run_ind
+    # write result to text file            
+    fields = [name, desc,
+              res.sample_set.name, res.sample_set.desc, 
+              len(res.sample_set), res.es, res.nes, res.pval, 
+              res.qval, res.fwerp, res.es_run_ind,
+              le_num_hits, le_frac_hits, 
+              sample_set_frac_le,
+              null_set_frac_le]
+    return fields
 
-def create_detailed_report(wobj, res, config):
-    # only create detailed report if pvalue less than threshold
-    if res.qval > config.plot_qval_threshold:
-        return None
-    d = res.get_details()
-    # create enrichment plot
-    efig = res.plot(plot_conf_int=config.plot_conf_int,
-                    conf_int=config.conf_int)    
-    # create null distribution plot
-    nfig = res.plot_null_distribution()
-    if config.plot_png:
-        eplot_png = '%s.%s.eplot.png' % (wobj.name, res.sample_set.name)
-        nplot_png = '%s.%s.null.png' % (wobj.name, res.sample_set.name)
-        efig.savefig(os.path.join(config.details_dir, eplot_png))
-        nfig.savefig(os.path.join(config.details_dir, nplot_png))
+def write_details(name, desc, res, config):
+    '''
+    name: string
+    desc: string
+    res: algo.SampleSetResult object
+    config: config.Config object
+    
+    returns dict containing filenames written
+    '''
+    d = {}
+    if config.create_plots:
+        # create enrichment plot
+        res.plot(plot_conf_int=config.plot_conf_int,
+                 conf_int=config.conf_int, fig=global_fig)    
+        # save plots
+        eplot_png = '%s.%s.eplot.png' % (name, res.sample_set.name)
+        eplot_pdf = '%s.%s.eplot.pdf' % (name, res.sample_set.name)
+        global_fig.savefig(os.path.join(config.details_dir, eplot_png))
+        global_fig.savefig(os.path.join(config.details_dir, eplot_pdf))
+        # create null distribution plot
+        res.plot_null_distribution(fig=global_fig)
+        nplot_png = '%s.%s.null.png' % (name, res.sample_set.name)
+        nplot_pdf = '%s.%s.null.pdf' % (name, res.sample_set.name)
+        global_fig.savefig(os.path.join(config.details_dir, nplot_png))        
+        global_fig.savefig(os.path.join(config.details_dir, nplot_pdf))
         d.update({'eplot_png': eplot_png,
                   'nplot_png': nplot_png})
-    if config.plot_pdf:
-        eplot_pdf = '%s.%s.eplot.pdf' % (wobj.name, res.sample_set.name)
-        nplot_pdf = '%s.%s.null.pdf' % (wobj.name, res.sample_set.name)
-        efig.savefig(os.path.join(config.details_dir, eplot_pdf))
-        nfig.savefig(os.path.join(config.details_dir, nplot_pdf))
         d.update({'eplot_pdf': eplot_pdf,
                   'nplot_pdf': nplot_pdf})
-    plt.close()
-    # write details
-    details_tsv = '%s.%s.tsv' % (wobj.name, res.sample_set.name)
+    # write detailed report
+    details_rows = res.get_details_table()
+    details_tsv = '%s.%s.tsv' % (name, res.sample_set.name)
     fp = open(os.path.join(config.details_dir, details_tsv), 'w')
-    json.dump(d, fp)
+    for fields in details_rows:
+        print >>fp, '\t'.join(map(str,fields))
     fp.close()
-    return details_tsv
+    d['tsv'] = details_tsv
+    # render to html
+    if config.create_html:
+        result_dict = dict(zip(REPORT_FIELDS, format_result(name, desc, res)))
+        details_html = '%s.%s.html' % (name, res.sample_set.name)
+        t = env.get_template('details.html')
+        fp = open(os.path.join(config.details_dir, details_html), 'w')
+        print >>fp, t.render(res=result_dict, 
+                             files=d,
+                             details=details_rows)
+        fp.close()
+        d['html'] = details_html
+    return d
+
+def write_html_report(filename, config):
+    def parse_report_as_dicts(filename):
+        '''
+        parses lines of the out.txt report file produced by SSEA and 
+        generates dictionaries using the first line of the file
+        containing the header fields
+        '''
+        fileh = open(filename, 'r')
+        header_fields = fileh.next().strip().split('\t')
+        details_ind = header_fields.index('details')
+        for line in fileh:
+            fields = line.strip().split('\t')
+            fields[details_ind] = json.loads(fields[details_ind])
+            yield dict(zip(header_fields, fields))
+        fileh.close()
+    report_html = 'out.html'
+    t = env.get_template('report.html')
+    fp = open(os.path.join(config.output_dir, report_html), 'w')
+    print >>fp, t.render(name=config.name,
+                         details_dir=DETAILS_DIR,
+                         results=parse_report_as_dicts(filename))
+    fp.close()
+
+def ssea_worker(input_queue, worker_tsv_file, samples, sample_sets, config):
+    # setup output file
+    fp = open(worker_tsv_file, 'w')
+    try:
+        # process input
+        while True:
+            name, desc, weights = input_queue.get()
+            if (name is None):
+                break
+            results = ssea_run(samples, weights, sample_sets, 
+                               weight_method_miss=config.weight_miss,
+                               weight_method_hit=config.weight_hit,
+                               perms=config.perms)
+            for res in results:
+                # get output fields
+                fields = format_result(name, desc, res)
+                # decide whether to create detailed report
+                if res.qval <= config.fdr_qval_threshold:                
+                    details_dict = write_details(name, desc, res, config)
+                    details_json = json.dumps(details_dict)
+                else:
+                    details_json = json.dumps({})
+                # output to text file
+                fields.append(details_json)
+                print >>fp, '\t'.join(map(str, fields))
+            input_queue.task_done()
+    except:
+        logging.error('Exception in ssea_worker')
+        input_queue.cancel_join_thread()
+        raise
+    # cleanup output files
+    fp.close()
+    input_queue.task_done()
 
 def ssea_main(config):
     # read sample sets
@@ -111,7 +213,6 @@ def ssea_main(config):
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:
-        logging.debug("\tsample Set %s size %d" % (sample_set.name, len(sample_set)))
         if ((config.sample_set_size_min > 0) and
             (len(sample_set.value) < config.sample_set_size_min)):
             logging.warning("\tsample set %s excluded because size %d < %d" %                              
@@ -124,6 +225,7 @@ def ssea_main(config):
                             (sample_set.name, len(sample_set.value), 
                              config.sample_set_size_max))
             continue
+        logging.debug("\tsample set %s size %d" % (sample_set.name, len(sample_set)))
         filtered_sample_sets.append(sample_set)
     logging.info("\tNumber of filtered sample sets: %d" % (len(filtered_sample_sets)))
     sample_sets = filtered_sample_sets
@@ -136,40 +238,87 @@ def ssea_main(config):
         logging.debug("\tCreating details directory '%s'" % 
                       (config.details_dir))
         os.makedirs(config.details_dir)
-    # parse weight matrix and run main ssea algorithm
+    # create temp directory
+    tmp_dir = os.path.join(config.output_dir, "tmp")
+    if not os.path.exists(tmp_dir):
+        logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
+        os.makedirs(tmp_dir)
+    # create directory for static web files (CSS, javascript, etc)
+    web_dir = os.path.join(config.output_dir, 'web')
+    if not os.path.exists(web_dir):
+        logging.info("\tInstalling web files")
+        shutil.copytree(SRC_WEB_PATH, web_dir)
+    # inspect weight vector file to get samples
+    wmt_fileh = open(config.weight_matrix_file)
+    wmt_header_fields = wmt_fileh.next().strip().split('\t')
+    samples = wmt_header_fields[WeightVector.METADATA_COLS:]
+    # create multiprocessing queue for passing data
+    input_queue = JoinableQueue(maxsize=config.num_processors*3)
+    # start worker processes
     logging.info("Running SSEA")
-    fp = open(os.path.join(config.output_dir, 'out.tsv'), 'w')
-    print >>fp, '\t'.join(HEADER_FIELDS)
-    for wobj in WeightMatrix.parse_wmt(config.weight_matrix_file):
-        logging.info("\tName: %s (%s)" % (wobj.name, wobj.desc))
-        results = ssea_run(wobj.samples, wobj.weights, sample_sets, 
-                           weight_method_miss=config.weight_miss,
-                           weight_method_hit=config.weight_hit,
-                           perms=config.perms)
-        for res in results:
-            # create detailed report
-            details = create_detailed_report(wobj, res, config)
-            # calculate leading edge stats
-            member_inds = (res.membership > 0).nonzero()[0]
-            le_size = sum(ind <= res.es_run_ind 
-                          for ind in member_inds)
-            le_frac = float(le_size) / len(res.sample_set)
-            if res.es_run_ind == 0:
-                le_signal = 0.0
-            else:
-                le_signal = float(le_size) / res.es_run_ind
-            le_noise = (float(res.es_run_ind - le_size) / 
-                        (len(wobj.weights) - len(res.sample_set)))
-            # write result to text file            
-            fields = [wobj.name, wobj.desc,
-                      res.sample_set.name, res.sample_set.desc, 
-                      len(res.sample_set), res.es, res.nes, res.pval, 
-                      res.qval, res.fwerp, res.es_run_ind,
-                      le_size, le_frac, le_signal, le_noise, details]
-            print >>fp, '\t'.join(map(str,fields))
-    # output to text file
+    procs = []
+    worker_tsv_files = []
+    try:
+        for i in xrange(config.num_processors):
+            worker_tsv_file = os.path.join(tmp_dir, "worker%03d.tsv" % (i))
+            worker_tsv_files.append(worker_tsv_file)
+            args = (input_queue, worker_tsv_file, samples, sample_sets, config)
+            p = Process(target=ssea_worker, args=args)
+            p.daemon = True
+            p.start()
+            procs.append(p)
+        # parse wmt file
+        for line in wmt_fileh:
+            fields = line.strip().split('\t')
+            name = fields[0]
+            desc = fields[1]
+            weights = map(float,fields[2:])
+            logging.info("\tName: %s (%s)" % (name, desc))
+            input_queue.put((name, desc, weights))
+    finally:
+        # stop workers
+        for p in procs:
+            input_queue.put((None, None, None))
+        # close queue
+        input_queue.join()
+        input_queue.close()
+        # join worker processes
+        for p in procs:
+            p.join()
+    wmt_fileh.close()
+    # merge output files
+    logging.info("Merging %d worker report files" % 
+                 (config.num_processors))
+    report_tsv_file = os.path.join(config.output_dir, 'out.tsv')
+    fp = open(report_tsv_file, 'w')
+    print >>fp, '\t'.join(REPORT_FIELDS)
+    for filename in worker_tsv_files:
+        shutil.copyfileobj(open(filename), fp)
     fp.close()
+    # remove worker files
+    for filename in worker_tsv_files:
+        if os.path.exists(filename):
+            os.remove(filename)
+    # cleanup
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+    # create html report
+    if config.create_html:
+        logging.info("Writing HTML Report")
+        write_html_report(report_tsv_file, config)
+    # free resources
+    plt.close('all')
+    logging.info("Finished")
 
+class CLIError(Exception):
+    '''Generic exception to raise and log different fatal errors.'''
+    def __init__(self, msg):
+        super(CLIError).__init__(type(self))
+        self.msg = "ERROR: %s" % msg
+    def __str__(self):
+        return self.msg
+    def __unicode__(self):
+        return self.msg
 
 def main(argv=None):
     '''Command line options.'''    
