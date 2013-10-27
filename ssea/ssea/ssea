@@ -16,8 +16,8 @@ Assessment of enrichment in a ranked list of quantitative measurements
 @deffield    updated: Updated
 '''
 # set matplotlib backend
-#import matplotlib
-#matplotlib.use('Agg')
+import matplotlib
+matplotlib.use('Agg')
 
 import sys
 import os
@@ -249,10 +249,12 @@ def ssea_weight_vector(weight_vec, sample_sets, config, outfileh,
         fields.append(details_json)
         print >>outfileh, '\t'.join(map(str, fields))
         # update ES histograms
-        hists_null_pos[i] += np.histogram(res.es_null, BINS_POS)[0]
-        hists_null_neg[i] += np.histogram(res.es_null, BINS_NEG)[0]
-        hists_obs_pos[i] += np.histogram(res.es, BINS_POS)[0]
-        hists_obs_neg[i] += np.histogram(res.es, BINS_NEG)[0]
+        if res.es <= 0:
+            hists_null_neg[i] += np.histogram(res.es_null, BINS_NEG)[0]
+            hists_obs_neg[i] += np.histogram(res.es, BINS_NEG)[0]
+        if res.es >= 0:
+            hists_null_pos[i] += np.histogram(res.es_null, BINS_POS)[0]        
+            hists_obs_pos[i] += np.histogram(res.es, BINS_POS)[0]
 
 def ssea_serial(weight_vec_iter, sample_sets, config, output_tsv_file,
                 output_hist_file):
