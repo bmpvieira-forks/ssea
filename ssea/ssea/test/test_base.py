@@ -8,7 +8,7 @@ import unittest
 import random
 import os
 
-from ssea.base import SampleSet
+from ssea.base import SampleSet, WeightVector
 
 def generate_random_sample_sets(N, minsize, maxsize, population):
     names = []
@@ -77,6 +77,10 @@ class TestBase(unittest.TestCase):
             self.assertEqual(read_sample_sets[i].desc, descs[i])
             self.assertEqual(read_sample_sets[i].value, set(sample_sets[i]))
         os.remove('tmp')
+
+    def test_weight_vector_parser(self):
+        pass
+    
 
 
 if __name__ == "__main__":

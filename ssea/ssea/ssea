@@ -16,8 +16,8 @@ Assessment of enrichment in a ranked list of quantitative measurements
 @deffield    updated: Updated
 '''
 # set matplotlib backend
-import matplotlib
-matplotlib.use('Agg')
+#import matplotlib
+#matplotlib.use('Agg')
 
 import sys
 import os
@@ -26,6 +26,7 @@ import argparse
 import logging
 import json
 import matplotlib.pyplot as plt
+import numpy as np
 from multiprocessing import Process, JoinableQueue
 
 __all__ = []
@@ -60,15 +61,80 @@ REPORT_FIELDS = ['name',
                  'nominal_p_value',
                  'fdr_q_value',
                  'fwer_p_value',
+                 'global_nes',
+                 'global_fdr_q_value',
                  'rank_at_max',
                  'leading_edge_num_hits',
                  'leading_edge_frac_hits',
                  'sample_set_frac_in_leading_edge',
                  'null_set_frac_in_leading_edge',
                  'details']
+REPORT_FIELD_MAP = dict((v,k) for k,v in enumerate(REPORT_FIELDS))
 
 # matplotlib static figure
 global_fig = plt.figure(0)
+
+# null enrichment score histogram bins
+NUM_BINS = 10000
+BINS_NEG = np.linspace(-1.0, 0.0, num=NUM_BINS+1)
+BINS_POS = np.linspace(0.0, 1.0, num=NUM_BINS+1)
+BIN_CENTERS_NEG = (BINS_NEG[:-1] + BINS_NEG[1:]) / 2.
+BIN_CENTERS_POS = (BINS_POS[:-1] + BINS_POS[1:]) / 2.
+
+def compute_global_stats(sample_sets, es_hist_file, input_tsv_file,
+                         output_tsv_file):
+    # read es arrays
+    npzfile = np.load(es_hist_file)
+    hists_null_pos = npzfile['hists_null_pos']
+    hists_null_neg = npzfile['hists_null_neg']
+    hists_obs_pos = npzfile['hists_obs_pos']
+    hists_obs_neg = npzfile['hists_obs_neg']
+    npzfile.close()
+    # compute totals
+    hists_null_pos_counts = hists_null_pos.sum(axis=1)
+    hists_null_neg_counts = hists_null_neg.sum(axis=1)
+    hists_obs_pos_counts = hists_obs_pos.sum(axis=1)
+    hists_obs_neg_counts = hists_obs_neg.sum(axis=1)
+    # compute means
+    hists_null_neg_means = np.fabs((hists_null_neg * BIN_CENTERS_NEG).sum(axis=1) / 
+                                   hists_null_neg_counts)
+    hists_null_pos_means = np.fabs((hists_null_pos * BIN_CENTERS_POS).sum(axis=1) / 
+                                   hists_null_pos_counts)
+    # map sample set names to indexes
+    sample_set_ind_map = \
+        dict((ss.name, i) for i,ss in enumerate(sample_sets))
+    # read report
+    fout = open(output_tsv_file, 'w')
+    print >>fout, '\t'.join(REPORT_FIELDS)
+    fin = open(input_tsv_file)
+    fin.next()
+    es_col_ind = REPORT_FIELD_MAP['es']
+    sample_set_col_ind = REPORT_FIELD_MAP['sample_set_name']
+    global_nes_ind = REPORT_FIELD_MAP['global_nes']
+    global_qval_ind = REPORT_FIELD_MAP['global_fdr_q_value']
+    for line in fin:
+        # read result
+        fields = line.strip().split('\t')
+        sample_set_name = fields[sample_set_col_ind]
+        i = sample_set_ind_map[sample_set_name]
+        es = float(fields[es_col_ind])
+        # compute global nes and fdr        
+        if es < 0:
+            global_nes = es / hists_null_neg_means[i]            
+            es_bin = np.digitize((es,), BINS_NEG)
+            n = hists_null_neg[i,:es_bin].sum() / float(hists_null_neg_counts[i])
+            d = hists_obs_neg[i,:es_bin].sum() / float(hists_obs_neg_counts[i])
+        else:
+            global_nes = es / hists_null_pos_means[i]            
+            es_bin = np.digitize((es,), BINS_POS) - 1
+            n = hists_null_pos[i,es_bin:].sum() / float(hists_null_pos_counts[i])
+            d = hists_obs_pos[i,es_bin:].sum() / float(hists_obs_pos_counts[i])
+        global_fdr_qval = n / d
+        fields[global_nes_ind] = str(global_nes)
+        fields[global_qval_ind] = str(global_fdr_qval)
+        print >>fout, '\t'.join(fields)
+    fin.close()
+    fout.close()
 
 def format_result(name, desc, res):
     # calculate leading edge stats
@@ -87,7 +153,8 @@ def format_result(name, desc, res):
     fields = [name, desc,
               res.sample_set.name, res.sample_set.desc, 
               len(res.sample_set), res.es, res.nes, res.pval, 
-              res.qval, res.fwerp, res.es_run_ind,
+              res.qval, res.fwerp, 'NA', 'NA',
+              res.es_run_ind,
               le_num_hits, le_frac_hits, 
               sample_set_frac_le,
               null_set_frac_le]
@@ -143,6 +210,156 @@ def write_details(name, desc, res, config):
         d['html'] = details_html
     return d
 
+def ssea_weight_vector(weight_vec, sample_sets, config, outfileh,
+                       hists_null_pos, hists_null_neg,
+                       hists_obs_pos, hists_obs_neg):
+    '''
+    Run SSEA on a single WeightVector object across a list of SampleSet 
+    objects
+    
+    weight_vec: WeightVector object
+    sample_sets: list of SampleSet objects
+    config: Config object
+    outfileh: open file object for writing results
+
+    hist_null_pos: histograms to store ES null >= 0
+    hist_null_neg: histograms to store ES null <= 0
+    hist_obs_pos: histograms to store ES >= 0
+    hist_obs_neg: histograms to store ES <= 0    
+    '''
+    logging.info("\tName: %s" % (weight_vec.name))
+    results = ssea_run(weight_vec.samples, 
+                       weight_vec.weights, 
+                       sample_sets, 
+                       weight_method_miss=config.weight_miss,
+                       weight_method_hit=config.weight_hit,
+                       perms=config.perms)
+    name = weight_vec.name
+    desc = ' '.join(weight_vec.metadata)
+    for i,res in enumerate(results):
+        # get output fields
+        fields = format_result(name, desc, res) 
+        # decide whether to create detailed report
+        if res.qval <= config.fdr_qval_threshold:                
+            details_dict = write_details(name, desc, res, config) 
+            details_json = json.dumps(details_dict)
+        else:
+            details_json = json.dumps({})
+        # output to text file
+        fields.append(details_json)
+        print >>outfileh, '\t'.join(map(str, fields))
+        # update ES histograms
+        hists_null_pos[i] += np.histogram(res.es_null, BINS_POS)[0]
+        hists_null_neg[i] += np.histogram(res.es_null, BINS_NEG)[0]
+        hists_obs_pos[i] += np.histogram(res.es, BINS_POS)[0]
+        hists_obs_neg[i] += np.histogram(res.es, BINS_NEG)[0]
+
+def ssea_serial(weight_vec_iter, sample_sets, config, output_tsv_file,
+                output_hist_file):
+    '''
+    main SSEA loop (single processor)
+    '''
+    # setup global ES histograms
+    hists_null_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    hists_null_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    hists_obs_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    hists_obs_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    # setup report file
+    fp = open(output_tsv_file, 'w')
+    print >>fp, '\t'.join(REPORT_FIELDS)
+    for weight_vec in weight_vec_iter:
+        ssea_weight_vector(weight_vec, sample_sets, config, fp,
+                           hists_null_pos, hists_null_neg,
+                           hists_obs_pos, hists_obs_neg)
+    fp.close()
+    # save histograms to a file
+    np.savez(output_hist_file,
+             hists_null_pos=hists_null_pos,
+             hists_null_neg=hists_null_neg,
+             hists_obs_pos=hists_obs_pos,
+             hists_obs_neg=hists_obs_neg)
+
+def ssea_parallel(weight_vec_iter, sample_sets, config, output_tsv_file,
+                  output_hist_file): 
+    '''
+    main SSEA loop (multiprocessing implementation)
+    '''
+    def worker(input_queue, sample_sets, config, tsv_file, hist_file):
+        def queue_iter(q):
+            while True:
+                obj = q.get()
+                if (obj is None):
+                    break
+                yield obj
+                input_queue.task_done()
+            input_queue.task_done()
+        # initialize output file
+        ssea_serial(queue_iter(input_queue), sample_sets, config, 
+                    tsv_file, hist_file)
+    # create temp directory
+    tmp_dir = os.path.join(config.output_dir, "tmp")
+    if not os.path.exists(tmp_dir):
+        logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
+        os.makedirs(tmp_dir)
+    # create multiprocessing queue for passing data
+    input_queue = JoinableQueue(maxsize=config.num_processors*3)
+    # start worker processes
+    procs = []
+    worker_tsv_files = []
+    worker_hist_files = []
+    try:
+        for i in xrange(config.num_processors):
+            tsv_file = os.path.join(tmp_dir, "w%03d_report.tsv" % (i))
+            worker_tsv_files.append(tsv_file)
+            hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
+            worker_hist_files.append(hist_file)
+            args = (input_queue, sample_sets, config, tsv_file, hist_file) 
+            p = Process(target=worker, args=args)
+            p.start()
+            procs.append(p)
+        # parse weight vectors
+        for weight_vec in weight_vec_iter:
+            input_queue.put(weight_vec)
+    finally:
+        # stop workers
+        for p in procs:
+            input_queue.put(None)
+        # close queue
+        input_queue.close()
+        input_queue.join()
+        # join worker processes
+        for p in procs:
+            p.join()
+    # merge workers
+    logging.info("Merging %d worker results" % (config.num_processors))
+    fp = open(output_tsv_file, 'w')
+    print >>fp, '\t'.join(REPORT_FIELDS)
+    # setup global ES histograms
+    hists_null_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    hists_null_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    hists_obs_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    hists_obs_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    for i in xrange(config.num_processors):
+        # merge report tsv
+        tsv_file = worker_tsv_files[i]
+        with open(tsv_file, 'r') as fin:
+            fin.next() # skip header
+            for line in fin:
+                print >>fp, line.rstrip()
+        # aggregate numpy arrays
+        npzfile = np.load(worker_hist_files[i])
+        hists_null_pos += npzfile['hists_null_pos']
+        hists_null_neg += npzfile['hists_null_neg']
+        hists_obs_pos += npzfile['hists_obs_pos']
+        hists_obs_neg += npzfile['hists_obs_neg']
+        npzfile.close()
+    fp.close() 
+    np.savez(output_hist_file,
+             hists_null_pos=hists_null_pos,
+             hists_null_neg=hists_null_neg,
+             hists_obs_pos=hists_obs_pos,
+             hists_obs_neg=hists_obs_neg)             
+
 def write_html_report(filename, config):
     def parse_report_as_dicts(filename):
         '''
@@ -165,40 +382,6 @@ def write_html_report(filename, config):
                          details_dir=DETAILS_DIR,
                          results=parse_report_as_dicts(filename))
     fp.close()
-
-def ssea_worker(input_queue, worker_tsv_file, samples, sample_sets, config):
-    # setup output file
-    fp = open(worker_tsv_file, 'w')
-    try:
-        # process input
-        while True:
-            name, desc, weights = input_queue.get()
-            if (name is None):
-                break
-            results = ssea_run(samples, weights, sample_sets, 
-                               weight_method_miss=config.weight_miss,
-                               weight_method_hit=config.weight_hit,
-                               perms=config.perms)
-            for res in results:
-                # get output fields
-                fields = format_result(name, desc, res)
-                # decide whether to create detailed report
-                if res.qval <= config.fdr_qval_threshold:                
-                    details_dict = write_details(name, desc, res, config)
-                    details_json = json.dumps(details_dict)
-                else:
-                    details_json = json.dumps({})
-                # output to text file
-                fields.append(details_json)
-                print >>fp, '\t'.join(map(str, fields))
-            input_queue.task_done()
-    except:
-        logging.error('Exception in ssea_worker')
-        input_queue.cancel_join_thread()
-        raise
-    # cleanup output files
-    fp.close()
-    input_queue.task_done()
 
 def ssea_main(config):
     # read sample sets
@@ -243,82 +426,44 @@ def ssea_main(config):
     if not os.path.exists(tmp_dir):
         logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
         os.makedirs(tmp_dir)
-    # create directory for static web files (CSS, javascript, etc)
-    web_dir = os.path.join(config.output_dir, 'web')
-    if not os.path.exists(web_dir):
-        logging.info("\tInstalling web files")
-        shutil.copytree(SRC_WEB_PATH, web_dir)
-    # inspect weight vector file to get samples
-    wmt_fileh = open(config.weight_matrix_file)
-    wmt_header_fields = wmt_fileh.next().strip().split('\t')
-    samples = wmt_header_fields[WeightVector.METADATA_COLS:]
-    # create multiprocessing queue for passing data
-    input_queue = JoinableQueue(maxsize=config.num_processors*3)
-    # start worker processes
-    logging.info("Running SSEA")
-    procs = []
-    worker_tsv_files = []
-    try:
-        for i in xrange(config.num_processors):
-            worker_tsv_file = os.path.join(tmp_dir, "worker%03d.tsv" % (i))
-            worker_tsv_files.append(worker_tsv_file)
-            args = (input_queue, worker_tsv_file, samples, sample_sets, config)
-            p = Process(target=ssea_worker, args=args)
-            p.daemon = True
-            p.start()
-            procs.append(p)
-        # parse wmt file
-        for line in wmt_fileh:
-            fields = line.strip().split('\t')
-            name = fields[0]
-            desc = fields[1]
-            weights = map(float,fields[2:])
-            logging.info("\tName: %s (%s)" % (name, desc))
-            input_queue.put((name, desc, weights))
-    finally:
-        # stop workers
-        for p in procs:
-            input_queue.put((None, None, None))
-        # close queue
-        input_queue.join()
-        input_queue.close()
-        # join worker processes
-        for p in procs:
-            p.join()
-    wmt_fileh.close()
-    # merge output files
-    logging.info("Merging %d worker report files" % 
-                 (config.num_processors))
+    # parse weight matrix file
+    # TODO: make command line args for 'na_val'
+    # TODO: read metadata cols
+    weight_vec_iter = WeightVector.parse_wmt(config.weight_matrix_file, 
+                                             na_val="-1", 
+                                             metadata_cols=2)
+    # output files
+    tmp_tsv_file = os.path.join(tmp_dir, 'out.tsv')
+    es_hists_file = os.path.join(config.output_dir, "es_hists.npz")
+    if config.num_processors > 1:
+        logging.info("Running SSEA in parallel with %d workers" % 
+                     (config.num_processors))
+        ssea_parallel(weight_vec_iter, sample_sets, config,
+                      tmp_tsv_file, es_hists_file)
+    else:
+        logging.info("Running SSEA in serial")
+        ssea_serial(weight_vec_iter, sample_sets, config, 
+                    tmp_tsv_file, es_hists_file)
+    # use ES null distributions to compute global statistics
+    # and produce a report
     report_tsv_file = os.path.join(config.output_dir, 'out.tsv')
-    fp = open(report_tsv_file, 'w')
-    print >>fp, '\t'.join(REPORT_FIELDS)
-    for filename in worker_tsv_files:
-        shutil.copyfileobj(open(filename), fp)
-    fp.close()
-    # remove worker files
-    for filename in worker_tsv_files:
-        if os.path.exists(filename):
-            os.remove(filename)
-    # cleanup
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
+    compute_global_stats(sample_sets, es_hists_file, tmp_tsv_file,
+                         report_tsv_file)
     # create html report
     if config.create_html:
         logging.info("Writing HTML Report")
         write_html_report(report_tsv_file, config)
+        # create directory for static web files (CSS, javascript, etc)
+        web_dir = os.path.join(config.output_dir, 'web')
+        if not os.path.exists(web_dir):
+            logging.info("\tInstalling web files")
+            shutil.copytree(SRC_WEB_PATH, web_dir)
     # free resources
     plt.close('all')
+    # cleanup
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)    
     logging.info("Finished")
-
-class CLIError(Exception):
-    '''Generic exception to raise and log different fatal errors.'''
-    def __init__(self, msg):
-        super(CLIError).__init__(type(self))
-        self.msg = "ERROR: %s" % msg
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
 
 def main(argv=None):
     '''Command line options.'''    

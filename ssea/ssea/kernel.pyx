@@ -1,3 +1,6 @@
+# encoding: utf-8
+# cython: profile=True
+# filename: kernel.pyx
 '''
 Created on Oct 16, 2013
 
@@ -17,13 +20,65 @@ ctypedef np.int_t INT_t
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def ssea_kernel(tuple rle_lengths, 
-                np.ndarray[FLOAT_t, ndim=1] rle_weights_miss,
-                np.ndarray[FLOAT_t, ndim=1] rle_weights_hit,
+def run_lengths(np.ndarray[FLOAT_t, ndim=1] arr):
+    '''
+    counts runs of consecutive values in a sequence
+    a: sequence or iterable
+    returns list
+    '''
+    assert arr.dtype == FLOAT_DTYPE
+    cdef float prev, cur
+    cdef list lengths = []
+    cdef int count, i, length
+    # ignore zero length array
+    length = len(arr)
+    if length == 0:
+        return lengths    
+    prev = arr[0]
+    count = 1
+    for i in xrange(1,length):
+        cur = arr[i]
+        if cur != prev:
+            lengths.append(count)
+            count = 1
+            prev = cur
+        else:
+            count += 1
+    lengths.append(count)
+    return lengths
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def rld2d(list lengths, 
+          np.ndarray[FLOAT_t, ndim=2] arr):
+    '''run length decode for 2d array'''
+    assert arr.dtype == FLOAT_DTYPE
+    assert len(lengths) == arr.shape[0]
+    cdef np.ndarray[FLOAT_t, ndim=2] out
+    cdef int length, offset, i, j, ix
+    cdef int nsamples, nsets, nlengths    
+    nlengths = len(lengths)
+    nsamples = sum(lengths)
+    nsets = arr.shape[1]
+    out = np.empty((nsamples,nsets), dtype=FLOAT_DTYPE)
+    offset = 0
+    for i in xrange(nlengths):
+        length = lengths[i]
+        for ix in xrange(offset, offset+length):
+            for j in xrange(nsets):
+                out[ix,j] = arr[i,j]
+        offset += length
+    return out
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights,
+                np.ndarray[FLOAT_t, ndim=1] weights_miss,
+                np.ndarray[FLOAT_t, ndim=1] weights_hit,
                 np.ndarray[UINT8_t, ndim=2] membership,
                 np.ndarray[INT_t, ndim=1] perm):
-    assert rle_weights_miss.dtype == FLOAT_DTYPE
-    assert rle_weights_hit.dtype == FLOAT_DTYPE
+    assert weights_miss.dtype == FLOAT_DTYPE
+    assert weights_hit.dtype == FLOAT_DTYPE
     assert membership.dtype == UINT8_DTYPE
     # declare variables
     cdef np.ndarray[FLOAT_t, ndim=2] phit
@@ -33,13 +88,16 @@ def ssea_kernel(tuple rle_lengths,
     cdef np.ndarray[FLOAT_t, ndim=2] es_runs
     cdef np.ndarray[FLOAT_t, ndim=1] es_vals
     cdef np.ndarray[INT_t, ndim=1] es_run_inds
-    cdef int offset, i, j, ix, length
+    cdef int offset, i, ix, j, p, length
+    cdef int nsamples, nsets
     cdef float wt_hit, wt_miss
+    cdef list lengths
     # init variables
-    cdef int nsamples = len(rle_lengths)
-    cdef int nsets = membership.shape[1]
-    phit = np.zeros((nsamples,nsets), dtype=FLOAT_DTYPE)
-    pmiss = np.zeros((nsamples,nsets), dtype=FLOAT_DTYPE)
+    lengths = run_lengths(weights)    
+    nsamples = len(lengths)
+    nsets = membership.shape[1]
+    phit = np.empty((nsamples,nsets), dtype=FLOAT_DTYPE)
+    pmiss = np.empty((nsamples,nsets), dtype=FLOAT_DTYPE)
     # evaluate the fraction of samples in S "hits" and the fraction of 
     # samples not in S "misses" present up to a given position i in L
     offset = 0
@@ -47,19 +105,25 @@ def ssea_kernel(tuple rle_lengths,
         # run length encoding ensures that tied weights get added to same 
         # index of the hit/miss array, so all samples have identical weight
         # each each index
-        length = rle_lengths[i]
-        wt_miss = rle_weights_miss[i]
-        wt_hit = rle_weights_hit[i]
-        # count hits and misses at this index
+        length = lengths[i]
+        wt_miss = weights_miss[offset]
+        wt_hit = weights_hit[offset]        
+        # calculate cumulative sum of hits and misses at this index
+        for j in xrange(nsets):
+            if i == 0:
+                phit[i,j] = 0
+                pmiss[i,j] = 0
+            else:
+                phit[i,j] = phit[i-1,j]
+                pmiss[i,j] = pmiss[i-1,j]
         for ix in xrange(offset, offset+length):
+            p = perm[ix]
             for j in xrange(nsets):
-                if membership[perm[ix],j]:
+                if membership[p,j]:
                     phit[i,j] += wt_hit
                 else:
-                    pmiss[i,j] += wt_miss    
+                    pmiss[i,j] += wt_miss
         offset += length
-    pmiss = pmiss.cumsum(axis=0)
-    phit = phit.cumsum(axis=0)
     # normalize cumulative sums and handle cases where a sample set has a 
     # cumulative sum of zero
     norm_miss = np.empty(nsets, dtype=FLOAT_DTYPE)
@@ -74,8 +138,12 @@ def ssea_kernel(tuple rle_lengths,
     # or otherwise nonrandomly distributed, then ES(S) will be 
     # correspondingly high
     es_runs = (phit / norm_hit) - (pmiss / norm_miss)
-    es_run_inds = np.abs(es_runs).argmax(axis=0)
+    es_run_inds = np.fabs(es_runs).argmax(axis=0)
     es_vals = np.empty(nsets, dtype=FLOAT_DTYPE)
     for j,ix in enumerate(es_run_inds):
         es_vals[j] = es_runs[ix,j]
+    # decode run length encoded results
+    es_run_inds = np.array([sum(lengths[:x]) for x in es_run_inds])
+    es_runs = rld2d(lengths, es_runs)
     return es_vals, es_run_inds, es_runs
+
