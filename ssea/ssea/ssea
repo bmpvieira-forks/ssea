@@ -228,6 +228,7 @@ def ssea_weight_vector(weight_vec, sample_sets, config, outfileh, es_hists):
                        weight_method_miss=config.weight_miss,
                        weight_method_hit=config.weight_hit,
                        weight_const=config.weight_const,
+                       weight_noise=config.weight_noise,
                        perms=config.perms)
     name = weight_vec.name
     desc = ' '.join(weight_vec.metadata)
@@ -399,6 +400,10 @@ def ssea_main(config):
         filtered_sample_sets.append(sample_set)
     logging.info("\tNumber of filtered sample sets: %d" % (len(filtered_sample_sets)))
     sample_sets = filtered_sample_sets
+    # parse weight matrix file
+    weight_vec_iter = WeightVector.parse_wmt(config.weight_matrix_file, 
+                                             na_value=config.na_value,
+                                             metadata_cols=config.num_metadata_cols)
     # setup output directory
     if not os.path.exists(config.output_dir):
         logging.info("Creating output directory '%s'" % 
@@ -413,11 +418,6 @@ def ssea_main(config):
     if not os.path.exists(tmp_dir):
         logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
         os.makedirs(tmp_dir)
-    # parse weight matrix file
-    # TODO: read metadata cols
-    weight_vec_iter = WeightVector.parse_wmt(config.weight_matrix_file, 
-                                             na_value=config.na_value,
-                                             metadata_cols=2)
     # output files
     tmp_tsv_file = os.path.join(tmp_dir, 'out.tsv')
     es_hists_file = os.path.join(config.output_dir, "es_hists.npz")

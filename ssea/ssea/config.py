@@ -21,26 +21,27 @@ def timestamp():
 class Config(object):
     def __init__(self):
         self.version = __version__
+        self.num_processors = 1
+        self.name = 'myssea'
         self.weight_miss = 'weighted'
         self.weight_hit = 'weighted'
-        self.weight_const = 2.0
+        self.weight_const = 1.99
+        self.weight_noise = 0.02
         self.perms = 1000
         self.fdr_qval_threshold = 0.05
         self.plot_conf_int = True
+        self.conf_int = 0.95
         self.create_html = True
         self.create_plots = True
-        self.conf_int = 0.95
-        self.na_value = 'NA'
         self.sample_set_size_min = 10
         self.sample_set_size_max = 0
         self.smx_files = []
         self.smt_files = []
+        self.na_value = 'NA'
         self.num_metadata_cols = None
         self.weight_matrix_file = None
         self.output_dir = timestamp()
         self.details_dir = os.path.join(self.output_dir, 'details')
-        self.name = 'myssea'
-        self.num_processors = 1
     
     def get_argument_parser(self, parser=None):
         if parser is None:
@@ -69,6 +70,11 @@ class Config(object):
                          help='Constant floating-point number to add to '
                          'all weights prior to transformation '
                          '[default=%(default)s]')
+        grp.add_argument('--weight-noise', dest='weight_noise', type=float,
+                         default=self.weight_noise,
+                         help='Add uniform noise in the range [0.0-X) to '
+                         'the weights to increase robustness '
+                         '[default=%(default)s]') 
         grp.add_argument('--perms', type=int, default=self.perms,
                          help='Number of permutations '
                          '[default=%(default)s]')
@@ -122,6 +128,8 @@ class Config(object):
         log_func("\tpermutations:            %d" % (self.perms))
         log_func("\tweight method miss:      %s" % (self.weight_miss))
         log_func("\tweight method hit:       %s" % (self.weight_hit))
+        log_func("\tweight constant:         %f" % (self.weight_const))
+        log_func("\tweight noise:            %s" % (self.weight_noise))
         log_func("\tcreate html report:      %s" % (self.create_html))
         log_func("\tcreate plots:            %s" % (self.create_plots))
         log_func("\tFDR q-value threshold:   %f" % (self.fdr_qval_threshold))
@@ -144,6 +152,7 @@ class Config(object):
              'weight_miss': self.weight_miss,
              'weight_hit': self.weight_hit,
              'weight_const': self.weight_const,
+             'weight_noise': self.weight_noise,
              'create_html': self.create_html,
              'create_plots': self.create_plots,
              'fdr_qval_threshold': self.fdr_qval_threshold,
@@ -177,12 +186,17 @@ class Config(object):
         self.weight_miss = str(args.weight_miss)
         self.weight_hit = str(args.weight_hit)
         self.weight_const = args.weight_const
+        self.weight_noise = args.weight_noise
         if self.weight_const < 0.0:
             parser.error('weight const < 0.0 invalid')
-        elif ((self.weight_miss == 'log' or self.weight_hit == 'log') and
-              (self.weight_const < 1.0)):
-            parser.error('weight constant %f < 1.0 not allowed with '
-                         'log method' % (self.weight_const))
+        if (self.weight_const - self.weight_noise) < 0.0:            
+            parser.error('weight const minus noise < 0.0 invalid')
+        elif ((self.weight_miss == 'log' or self.weight_hit == 'log')):
+            if self.weight_const < 1.0:
+                parser.error('weight constant %f < 1.0 not allowed with '
+                             'log method' % (self.weight_const))
+            if (self.weight_const - self.weight_noise) < 1.0:
+                parser.error('weight constant minus noise is < 1.0')
         # output directory
         self.output_dir = args.output_dir
         if os.path.exists(self.output_dir):

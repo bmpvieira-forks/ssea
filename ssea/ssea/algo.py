@@ -9,33 +9,41 @@ import numpy as np
 from kernel import ssea_kernel
 from base import BOOL_DTYPE, Result
 
-def transform_weights(weights, method, const):
+def transform_weights(weights, method):
     if method == 'unweighted':
         return np.ones(len(weights), dtype=np.float)
     elif method == 'weighted':
-        return np.array(weights, dtype=np.float) + const
+        return weights
     elif method == 'log':
-        if const < 1.0:
-            raise ValueError('weight constant %f < 1.0 invalid for log '
-                             'weight method' % (const)) 
-        weights = np.array(weights, dtype=np.float)
         signs = np.array([-1.0 if w < 0 else 1.0 for w in weights])
-        return signs * np.log2(const + np.fabs(weights))
-
+        absarr = np.fabs(weights)
+        assert np.all(absarr >= 1.0)
+        return signs * np.log2(absarr)
+    else:
+        assert False
 
 def ssea_run(samples, weights, sample_sets, 
              weight_method_miss='unweighted', 
              weight_method_hit='unweighted',
              weight_const=0.0, 
+             weight_noise=0.0,
              perms=10000):
+    '''
+    '''
+    weights = np.array(weights, dtype=np.float)
+    # noise does not preserve rank so need to add first
+    tweights = weights.copy()
+    if weight_noise > 0.0:
+        tweights += np.random.random(len(weights))
     # rank order the N samples in D to form L={s1...sn} 
-    ranks = np.argsort(weights)[::-1]
+    ranks = np.argsort(tweights)[::-1]
     samples = [samples[i] for i in ranks]
-    weights = np.array([weights[i] for i in ranks], dtype=np.float)
-    # transform weights based on weight method, and use the absolute value 
-    # of the run length encoded weights for the main ssea calculation
-    weights_miss = np.fabs(transform_weights(weights, weight_method_miss, weight_const))
-    weights_hit = np.fabs(transform_weights(weights, weight_method_hit, weight_const))
+    weights = weights[ranks]
+    tweights = tweights[ranks]
+    # perform power transform and adjust by constant
+    tweights += weight_const
+    tweights_miss = np.fabs(transform_weights(tweights, weight_method_miss)) 
+    tweights_hit = np.fabs(transform_weights(tweights, weight_method_hit))    
     # convert sample sets to membership vectors
     membership = np.zeros((len(samples),len(sample_sets)), 
                           dtype=BOOL_DTYPE)
@@ -44,14 +52,14 @@ def ssea_run(samples, weights, sample_sets,
     # determine enrichment score (ES)
     perm = np.arange(len(samples))
     es_vals, es_run_inds, es_runs = \
-        ssea_kernel(weights, weights_miss, weights_hit, 
+        ssea_kernel(tweights, tweights_miss, tweights_hit, 
                     membership, perm)
     # permute samples and determine ES null distribution
     es_null = np.zeros((perms, len(sample_sets)), dtype=np.float)
     for i in xrange(perms):
         np.random.shuffle(perm)
-        es_null[i] = ssea_kernel(weights, weights_miss, 
-                                 weights_hit, membership, perm)[0]      
+        es_null[i] = ssea_kernel(tweights, tweights_miss, 
+                                 tweights_hit, membership, perm)[0]
     # default containers for results
     nes_vals = np.zeros(membership.shape[1], dtype=np.float)
     pvals = np.ones(membership.shape[1], dtype=np.float)
@@ -132,8 +140,8 @@ def ssea_run(samples, weights, sample_sets,
         res.samples = samples
         res.weights = weights
         res.membership = membership[:,j]
-        res.weights_miss = weights_miss
-        res.weights_hit = weights_hit
+        res.weights_miss = tweights_miss
+        res.weights_hit = tweights_hit
         res.es = es_vals[j]
         res.es_run_ind = es_run_inds[j]
         res.es_run = es_runs[:,j]
