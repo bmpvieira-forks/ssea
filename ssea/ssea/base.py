@@ -79,7 +79,7 @@ class WeightVector(object):
         self.weights = weights
 
     @staticmethod
-    def parse_wmt(filename, na_val='NA', metadata_cols=2):
+    def parse_wmt(filename, na_value='NA', metadata_cols=None):
         '''
         generator function to parse a weight matrix and return WeightVector 
         objects
@@ -87,10 +87,19 @@ class WeightVector(object):
         filename: string path to file
         na_val: value corresponding to missing data 
         '''
-        if metadata_cols < 1:
-            raise ParserError("metadata_cols param must be >=1")
         fileh = open(filename)
-        header_fields = fileh.next().strip().split('\t')
+        # try to get num metadata cols from comment in first line of file
+        line = fileh.next()        
+        if line.startswith('#'):
+            metadata_cols = int(line[1:].strip())
+            line = fileh.next()
+        if metadata_cols is None:
+            raise ParserError("Number of metadata columns not found in file "
+                              "and not set by user")
+        elif metadata_cols < 1:
+            raise ParserError("metadata_cols param must be >=1")
+        # read header of file
+        header_fields = line.strip().split('\t')            
         lineno = 2
         for line in fileh:
             fields = line.strip().split('\t')
@@ -104,7 +113,7 @@ class WeightVector(object):
             samples = []            
             for i in xrange(metadata_cols, len(fields)):
                 val = fields[i]
-                if val == na_val:
+                if val == na_value:
                     continue
                 try:
                     weights.append(float(val))

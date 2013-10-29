@@ -210,9 +210,7 @@ def write_details(name, desc, res, config):
         d['html'] = details_html
     return d
 
-def ssea_weight_vector(weight_vec, sample_sets, config, outfileh,
-                       hists_null_pos, hists_null_neg,
-                       hists_obs_pos, hists_obs_neg):
+def ssea_weight_vector(weight_vec, sample_sets, config, outfileh, es_hists):
     '''
     Run SSEA on a single WeightVector object across a list of SampleSet 
     objects
@@ -221,11 +219,7 @@ def ssea_weight_vector(weight_vec, sample_sets, config, outfileh,
     sample_sets: list of SampleSet objects
     config: Config object
     outfileh: open file object for writing results
-
-    hist_null_pos: histograms to store ES null >= 0
-    hist_null_neg: histograms to store ES null <= 0
-    hist_obs_pos: histograms to store ES >= 0
-    hist_obs_neg: histograms to store ES <= 0    
+    es_hists: dictionary of histogram data for ES distributions
     '''
     logging.info("\tName: %s" % (weight_vec.name))
     results = ssea_run(weight_vec.samples, 
@@ -233,6 +227,7 @@ def ssea_weight_vector(weight_vec, sample_sets, config, outfileh,
                        sample_sets, 
                        weight_method_miss=config.weight_miss,
                        weight_method_hit=config.weight_hit,
+                       weight_const=config.weight_const,
                        perms=config.perms)
     name = weight_vec.name
     desc = ' '.join(weight_vec.metadata)
@@ -250,11 +245,11 @@ def ssea_weight_vector(weight_vec, sample_sets, config, outfileh,
         print >>outfileh, '\t'.join(map(str, fields))
         # update ES histograms
         if res.es <= 0:
-            hists_null_neg[i] += np.histogram(res.es_null, BINS_NEG)[0]
-            hists_obs_neg[i] += np.histogram(res.es, BINS_NEG)[0]
+            es_hists['null_neg'][i] += np.histogram(res.es_null, BINS_NEG)[0]
+            es_hists['obs_neg'][i] += np.histogram(res.es, BINS_NEG)[0]
         if res.es >= 0:
-            hists_null_pos[i] += np.histogram(res.es_null, BINS_POS)[0]        
-            hists_obs_pos[i] += np.histogram(res.es, BINS_POS)[0]
+            es_hists['null_pos'][i] += np.histogram(res.es_null, BINS_POS)[0]        
+            es_hists['obs_pos'][i] += np.histogram(res.es, BINS_POS)[0]
 
 def ssea_serial(weight_vec_iter, sample_sets, config, output_tsv_file,
                 output_hist_file):
@@ -262,24 +257,18 @@ def ssea_serial(weight_vec_iter, sample_sets, config, output_tsv_file,
     main SSEA loop (single processor)
     '''
     # setup global ES histograms
-    hists_null_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
-    hists_null_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
-    hists_obs_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
-    hists_obs_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    es_hists = {'null_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
+                'null_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
+                'obs_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
+                'obs_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)}
     # setup report file
     fp = open(output_tsv_file, 'w')
     print >>fp, '\t'.join(REPORT_FIELDS)
     for weight_vec in weight_vec_iter:
-        ssea_weight_vector(weight_vec, sample_sets, config, fp,
-                           hists_null_pos, hists_null_neg,
-                           hists_obs_pos, hists_obs_neg)
+        ssea_weight_vector(weight_vec, sample_sets, config, fp, es_hists)
     fp.close()
     # save histograms to a file
-    np.savez(output_hist_file,
-             hists_null_pos=hists_null_pos,
-             hists_null_neg=hists_null_neg,
-             hists_obs_pos=hists_obs_pos,
-             hists_obs_neg=hists_obs_neg)
+    np.savez(output_hist_file, **es_hists)
 
 def ssea_parallel(weight_vec_iter, sample_sets, config, output_tsv_file,
                   output_hist_file): 
@@ -337,10 +326,10 @@ def ssea_parallel(weight_vec_iter, sample_sets, config, output_tsv_file,
     fp = open(output_tsv_file, 'w')
     print >>fp, '\t'.join(REPORT_FIELDS)
     # setup global ES histograms
-    hists_null_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
-    hists_null_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
-    hists_obs_pos = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
-    hists_obs_neg = np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)
+    es_hists = {'null_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
+                'null_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
+                'obs_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
+                'obs_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)}
     for i in xrange(config.num_processors):
         # merge report tsv
         tsv_file = worker_tsv_files[i]
@@ -350,17 +339,13 @@ def ssea_parallel(weight_vec_iter, sample_sets, config, output_tsv_file,
                 print >>fp, line.rstrip()
         # aggregate numpy arrays
         npzfile = np.load(worker_hist_files[i])
-        hists_null_pos += npzfile['hists_null_pos']
-        hists_null_neg += npzfile['hists_null_neg']
-        hists_obs_pos += npzfile['hists_obs_pos']
-        hists_obs_neg += npzfile['hists_obs_neg']
+        es_hists['null_pos'] += npzfile['null_pos']
+        es_hists['null_neg'] += npzfile['null_neg']
+        es_hists['obs_pos'] += npzfile['obs_pos']
+        es_hists['obs_neg'] += npzfile['obs_neg']
         npzfile.close()
     fp.close() 
-    np.savez(output_hist_file,
-             hists_null_pos=hists_null_pos,
-             hists_null_neg=hists_null_neg,
-             hists_obs_pos=hists_obs_pos,
-             hists_obs_neg=hists_obs_neg)             
+    np.savez(output_hist_file, **es_hists)
 
 def write_html_report(filename, config):
     def parse_report_as_dicts(filename):
@@ -429,16 +414,15 @@ def ssea_main(config):
         logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
         os.makedirs(tmp_dir)
     # parse weight matrix file
-    # TODO: make command line args for 'na_val'
     # TODO: read metadata cols
     weight_vec_iter = WeightVector.parse_wmt(config.weight_matrix_file, 
-                                             na_val="-1", 
+                                             na_value=config.na_value,
                                              metadata_cols=2)
     # output files
     tmp_tsv_file = os.path.join(tmp_dir, 'out.tsv')
     es_hists_file = os.path.join(config.output_dir, "es_hists.npz")
     if config.num_processors > 1:
-        logging.info("Running SSEA in parallel with %d workers" % 
+        logging.info("Running SSEA in parallel with %d processes" % 
                      (config.num_processors))
         ssea_parallel(weight_vec_iter, sample_sets, config,
                       tmp_tsv_file, es_hists_file)

@@ -23,16 +23,19 @@ class Config(object):
         self.version = __version__
         self.weight_miss = 'weighted'
         self.weight_hit = 'weighted'
+        self.weight_const = 2.0
         self.perms = 1000
         self.fdr_qval_threshold = 0.05
         self.plot_conf_int = True
         self.create_html = True
         self.create_plots = True
         self.conf_int = 0.95
+        self.na_value = 'NA'
         self.sample_set_size_min = 10
         self.sample_set_size_max = 0
         self.smx_files = []
         self.smt_files = []
+        self.num_metadata_cols = None
         self.weight_matrix_file = None
         self.output_dir = timestamp()
         self.details_dir = os.path.join(self.output_dir, 'details')
@@ -61,6 +64,11 @@ class Config(object):
                          default=self.weight_hit,
                          help='Weighting method for elements in set '
                          '[default=%(default)s]')
+        grp.add_argument('--weight-const', dest='weight_const', type=float,
+                         default=self.weight_const,
+                         help='Constant floating-point number to add to '
+                         'all weights prior to transformation '
+                         '[default=%(default)s]')
         grp.add_argument('--perms', type=int, default=self.perms,
                          help='Number of permutations '
                          '[default=%(default)s]')
@@ -83,6 +91,10 @@ class Config(object):
                          default=self.conf_int,
                          help='Confidence interval level '
                          '[default=%(default)s]')
+        grp.add_argument('--na-value', dest='na_value', 
+                         default=self.na_value,
+                         help='Value to interpret as missing/invalid '
+                         'in weight matrix [default=%(default)s]')
         grp.add_argument('--smin', dest="sample_set_size_min", type=int,
                          default=self.sample_set_size_min, metavar="N",
                          help='Exclude sample sets smaller than N '
@@ -95,6 +107,10 @@ class Config(object):
                          help='File(s) containing sets in column format')
         grp.add_argument('--smt', dest="smt_files", action='append',
                          help='File(s) containing sets in row format')
+        grp.add_argument('--metacols', type=int, dest='num_metadata_cols',
+                         default=self.num_metadata_cols,
+                         help='Number of columns of metadata in weight '
+                         'matrix file [default=%(default)s]')
         grp.add_argument('weight_matrix_file', 
                          help='File containing weight matrix')
         return parser
@@ -111,10 +127,12 @@ class Config(object):
         log_func("\tFDR q-value threshold:   %f" % (self.fdr_qval_threshold))
         log_func("\tplot conf interval:      %s" % (self.plot_conf_int))
         log_func("\tconf interval:           %f" % (self.conf_int))
+        log_func("\tna value:                %s" % (self.na_value))
         log_func("\tsample set size min:     %d" % (self.sample_set_size_min))
         log_func("\tsample set size max:     %d" % (self.sample_set_size_max))
         log_func("\tsmx files:               %s" % (','.join(self.smx_files)))
         log_func("\tsmt files:               %s" % (','.join(self.smt_files)))
+        log_func("\tnum metadata columns:    %s" % (self.num_metadata_cols))
         log_func("\tweight matrix file:      %s" % (self.weight_matrix_file))
         log_func("\toutput directory:        %s" % (self.output_dir))
         log_func("----------------------------------")
@@ -125,15 +143,18 @@ class Config(object):
              'perms': self.perms,
              'weight_miss': self.weight_miss,
              'weight_hit': self.weight_hit,
+             'weight_const': self.weight_const,
              'create_html': self.create_html,
              'create_plots': self.create_plots,
              'fdr_qval_threshold': self.fdr_qval_threshold,
              'plot_conf_int': self.plot_conf_int,
              'conf_int': self.conf_int,
+             'na_value': self.na_value,
              'sample_set_size_min': self.sample_set_size_min,
              'sample_set_size_max': self.sample_set_size_max,
              'smx_files': self.smx_files,
              'smt_files': self.smt_files,
+             'num_metadata_cols': self.num_metadata_cols,
              'weight_matrix_file': self.weight_matrix_file,
              'output_dir': self.output_dir}
         return d
@@ -141,17 +162,27 @@ class Config(object):
     def parse_args(self, parser, args):
         # process and check arguments
         self.perms = max(1, args.perms)
-        self.weight_miss = str(args.weight_miss)
-        self.weight_hit = str(args.weight_hit)
         self.create_html = args.create_html
         self.create_plots = args.create_plots
         self.fdr_qval_threshold = args.fdr_qval_threshold
         self.plot_conf_int = args.plot_conf_int
         self.conf_int = args.conf_int
+        self.na_value = args.na_value
         self.sample_set_size_min = args.sample_set_size_min
         self.sample_set_size_max = args.sample_set_size_max
         self.name = args.name
         self.num_processors = args.num_processors
+        self.num_metadata_cols = args.num_metadata_cols
+        # check weight methods and constant
+        self.weight_miss = str(args.weight_miss)
+        self.weight_hit = str(args.weight_hit)
+        self.weight_const = args.weight_const
+        if self.weight_const < 0.0:
+            parser.error('weight const < 0.0 invalid')
+        elif ((self.weight_miss == 'log' or self.weight_hit == 'log') and
+              (self.weight_const < 1.0)):
+            parser.error('weight constant %f < 1.0 not allowed with '
+                         'log method' % (self.weight_const))
         # output directory
         self.output_dir = args.output_dir
         if os.path.exists(self.output_dir):

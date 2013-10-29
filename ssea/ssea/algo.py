@@ -9,24 +9,24 @@ import numpy as np
 from kernel import ssea_kernel
 from base import BOOL_DTYPE, Result
 
-# constant to saturate logarithms of small numbers and prevent log of zero 
-LOG_CONSTANT = 0.1
-
-def transform_weights(weights, method):
+def transform_weights(weights, method, const):
     if method == 'unweighted':
         return np.ones(len(weights), dtype=np.float)
     elif method == 'weighted':
-        return np.array(weights, dtype=np.float)
+        return np.array(weights, dtype=np.float) + const
     elif method == 'log':
+        if const < 1.0:
+            raise ValueError('weight constant %f < 1.0 invalid for log '
+                             'weight method' % (const)) 
         weights = np.array(weights, dtype=np.float)
-        absweights = np.fabs(weights)
-        const = max(LOG_CONSTANT, absweights.min())
-        return np.sign(weights) * (np.log2(const + absweights) - 
-                                   np.log2(const))
+        signs = np.array([-1.0 if w < 0 else 1.0 for w in weights])
+        return signs * np.log2(const + np.fabs(weights))
+
 
 def ssea_run(samples, weights, sample_sets, 
-             weight_method_miss='unweighted',
+             weight_method_miss='unweighted', 
              weight_method_hit='unweighted',
+             weight_const=0.0, 
              perms=10000):
     # rank order the N samples in D to form L={s1...sn} 
     ranks = np.argsort(weights)[::-1]
@@ -34,8 +34,8 @@ def ssea_run(samples, weights, sample_sets,
     weights = np.array([weights[i] for i in ranks], dtype=np.float)
     # transform weights based on weight method, and use the absolute value 
     # of the run length encoded weights for the main ssea calculation
-    weights_miss = np.fabs(transform_weights(weights, weight_method_miss))
-    weights_hit = np.fabs(transform_weights(weights, weight_method_hit)) 
+    weights_miss = np.fabs(transform_weights(weights, weight_method_miss, weight_const))
+    weights_hit = np.fabs(transform_weights(weights, weight_method_hit, weight_const))
     # convert sample sets to membership vectors
     membership = np.zeros((len(samples),len(sample_sets)), 
                           dtype=BOOL_DTYPE)
@@ -60,7 +60,7 @@ def ssea_run(samples, weights, sample_sets,
     es_neg_inds = (es_vals < 0).nonzero()[0]
     if len(es_neg_inds) > 0:
         # mask positive scores 
-        es_null_neg = np.ma.masked_greater_equal(es_null[:,es_neg_inds], 0)
+        es_null_neg = np.ma.masked_greater(es_null[:,es_neg_inds], 0)
         # Adjust for variation in gene set size. Normalize ES(S,null)
         # and the observed ES(S), separately rescaling the positive and
         # negative scores by dividing by the mean of the ES(S,null) to
