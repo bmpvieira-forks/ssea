@@ -81,14 +81,14 @@ BINS_POS = np.linspace(0.0, 1.0, num=NUM_BINS+1)
 BIN_CENTERS_NEG = (BINS_NEG[:-1] + BINS_NEG[1:]) / 2.
 BIN_CENTERS_POS = (BINS_POS[:-1] + BINS_POS[1:]) / 2.
 
-def compute_global_stats(sample_sets, es_hist_file, input_tsv_file,
+def compute_global_stats(sample_sets, es_hists_file, input_tsv_file,
                          output_tsv_file):
     # read es arrays
-    npzfile = np.load(es_hist_file)
-    hists_null_pos = npzfile['hists_null_pos']
-    hists_null_neg = npzfile['hists_null_neg']
-    hists_obs_pos = npzfile['hists_obs_pos']
-    hists_obs_neg = npzfile['hists_obs_neg']
+    npzfile = np.load(es_hists_file)
+    hists_null_pos = npzfile['null_pos']
+    hists_null_neg = npzfile['null_neg']
+    hists_obs_pos = npzfile['obs_pos']
+    hists_obs_neg = npzfile['obs_neg']
     npzfile.close()
     # compute totals
     hists_null_pos_counts = hists_null_pos.sum(axis=1)
