@@ -34,7 +34,7 @@ def ssea_run(samples, weights, sample_sets,
     # noise does not preserve rank so need to add first
     tweights = weights.copy()
     if weight_noise > 0.0:
-        tweights += np.random.random(len(weights))
+        tweights += weight_noise * np.random.random(len(weights))
     # rank order the N samples in D to form L={s1...sn} 
     ranks = np.argsort(tweights)[::-1]
     samples = [samples[i] for i in ranks]
@@ -89,9 +89,9 @@ def ssea_run(samples, weights, sample_sets,
         # estimate nominal p value for S from ES(S,null) by using the
         # positive or negative portion of the distribution corresponding
         # to the sign of the observed ES(S)
-        pneg = (es_null_neg <= es_vals[es_neg_inds]).sum(axis=0)
-        pneg = pneg / (es_null_neg.count(axis=0).astype(float))    
-        pvals[es_neg_inds] = pneg
+        pneg = 1.0 + (es_null_neg <= es_vals[es_neg_inds]).sum(axis=0)
+        pneg = pneg / (1.0 + es_null_neg.count(axis=0).astype(float))    
+        pvals[es_neg_inds] = 2.0 * pneg
     # do the same for the positive enrichment scores (see above for
     # detailed comments
     es_pos_inds = (es_vals >= 0).nonzero()[0]
@@ -109,9 +109,9 @@ def ssea_run(samples, weights, sample_sets,
         nes_obs_pos_count = nes_obs_pos.count()
         nes_vals[es_pos_inds] = nes_obs_pos
         # estimate p values
-        ppos = (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
-        ppos = ppos / (es_null_pos.count(axis=0).astype(np.float))
-        pvals[es_pos_inds] = ppos
+        ppos = 1.0 + (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
+        ppos = ppos / (1.0 + es_null_pos.count(axis=0).astype(np.float))
+        pvals[es_pos_inds] = 2.0 * ppos
     # Control for multiple hypothesis testing and summarize results
     results = []
     for j in xrange(membership.shape[1]):
