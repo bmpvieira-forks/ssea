@@ -236,7 +236,8 @@ def ssea_parallel(weight_vecs, sample_sets, config, details_dir,
     
     See ssea_serial function for documentation
     '''
-    def worker(input_queue, sample_sets, config, tsv_file, hist_file):
+    def worker(input_queue, sample_sets, config, details_dir, tsv_file, 
+               hist_file):
         def queue_iter(q):
             while True:
                 obj = q.get()
@@ -247,7 +248,7 @@ def ssea_parallel(weight_vecs, sample_sets, config, details_dir,
             input_queue.task_done()
         # initialize output file
         ssea_serial(queue_iter(input_queue), sample_sets, config, 
-                    tsv_file, hist_file)
+                    details_dir, tsv_file, hist_file)
     # create temp directory
     tmp_dir = os.path.join(config.output_dir, "tmp")
     if not os.path.exists(tmp_dir):
@@ -265,7 +266,8 @@ def ssea_parallel(weight_vecs, sample_sets, config, details_dir,
             worker_tsv_files.append(tsv_file)
             hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
             worker_hist_files.append(hist_file)
-            args = (input_queue, sample_sets, config, tsv_file, hist_file) 
+            args = (input_queue, sample_sets, config, details_dir, 
+                    tsv_file, hist_file) 
             p = Process(target=worker, args=args)
             p.start()
             procs.append(p)
