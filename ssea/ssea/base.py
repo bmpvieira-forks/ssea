@@ -129,7 +129,7 @@ class WeightVector(object):
         fileh.close()
         
     @staticmethod
-    def from_data(rownames, samples, weight_matrix, na_value=np.nan):
+    def from_data(rownames, samples, weight_matrix, na_value=-1):
         '''
         rownames: list of weight vector names
         samples: list of samples        
@@ -144,7 +144,7 @@ class WeightVector(object):
             nansamples = []
             for j in xrange(weight_matrix.shape[1]):
                 val = weight_matrix[i,j]
-                if val == np.nan:
+                if (val == na_value) or (val is na_value):
                     continue
                 weights.append(val)
                 nansamples.append(samples[j])
