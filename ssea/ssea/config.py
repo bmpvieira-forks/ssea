@@ -10,38 +10,26 @@ from datetime import datetime
 from time import time
 
 # local imports
-from ssea import __version__
 from base import WEIGHT_METHODS
-
-DETAILS_DIR = 'details'
 
 def timestamp():
     return datetime.fromtimestamp(time()).strftime('%Y-%m-%d-%H-%M-%S-%f')
 
 class Config(object):
+    
     def __init__(self):
-        self.version = __version__
         self.num_processors = 1
         self.name = 'myssea'
-        self.weight_miss = 'weighted'
-        self.weight_hit = 'weighted'
-        self.weight_const = 1.99
-        self.weight_noise = 0.02
+        self.weight_miss = 'log'
+        self.weight_hit = 'log'
+        self.weight_const = 1.1
+        self.weight_noise = 0.1
         self.perms = 1000
-        self.fdr_qval_threshold = 0.05
+        self.detailed_report_threshold = 0.05
         self.plot_conf_int = True
         self.conf_int = 0.95
         self.create_html = True
-        self.create_plots = True
-        self.sample_set_size_min = 10
-        self.sample_set_size_max = 0
-        self.smx_files = []
-        self.smt_files = []
-        self.na_value = 'NA'
-        self.num_metadata_cols = None
-        self.weight_matrix_file = None
-        self.output_dir = timestamp()
-        self.details_dir = os.path.join(self.output_dir, 'details')
+        self.output_dir = "SSEA_%s" % (timestamp())
     
     def get_argument_parser(self, parser=None):
         if parser is None:
@@ -84,11 +72,11 @@ class Config(object):
         grp.add_argument('--no-plot', dest="create_plots", 
                          action="store_false", default=self.create_plots,
                          help='Do not create enrichment plots')
-        grp.add_argument('--fdr-qval-threshold', type=float,
-                         dest="fdr_qval_threshold",
-                         default=self.fdr_qval_threshold,
+        grp.add_argument('--threshold', type=float,
+                         dest="detailed_report_threshold",
+                         default=self.detailed_report_threshold,
                          help='FDR q-value threshold for generating '
-                         'reports [default=%(default)s]')
+                         'detailed reports [default=%(default)s]')
         grp.add_argument('--no-plot-conf-int', dest="plot_conf_int", 
                          action="store_false", default=self.plot_conf_int,
                          help='Do not show confidence intervals in '
@@ -97,28 +85,6 @@ class Config(object):
                          default=self.conf_int,
                          help='Confidence interval level '
                          '[default=%(default)s]')
-        grp.add_argument('--na-value', dest='na_value', 
-                         default=self.na_value,
-                         help='Value to interpret as missing/invalid '
-                         'in weight matrix [default=%(default)s]')
-        grp.add_argument('--smin', dest="sample_set_size_min", type=int,
-                         default=self.sample_set_size_min, metavar="N",
-                         help='Exclude sample sets smaller than N '
-                         'from the analysis')
-        grp.add_argument('--smax', dest="sample_set_size_max", type=int,
-                         default=self.sample_set_size_max, metavar="N",
-                         help='Exclude sample sets larger than N '
-                         'from the analysis')
-        grp.add_argument('--smx', dest="smx_files", action='append',
-                         help='File(s) containing sets in column format')
-        grp.add_argument('--smt', dest="smt_files", action='append',
-                         help='File(s) containing sets in row format')
-        grp.add_argument('--metacols', type=int, dest='num_metadata_cols',
-                         default=self.num_metadata_cols,
-                         help='Number of columns of metadata in weight '
-                         'matrix file [default=%(default)s]')
-        grp.add_argument('weight_matrix_file', 
-                         help='File containing weight matrix')
         return parser
 
     def log(self, log_func=logging.info):
@@ -132,22 +98,14 @@ class Config(object):
         log_func("\tweight noise:            %s" % (self.weight_noise))
         log_func("\tcreate html report:      %s" % (self.create_html))
         log_func("\tcreate plots:            %s" % (self.create_plots))
-        log_func("\tFDR q-value threshold:   %f" % (self.fdr_qval_threshold))
+        log_func("\tdetailed report q-val:   %f" % (self.detailed_report_threshold))
         log_func("\tplot conf interval:      %s" % (self.plot_conf_int))
         log_func("\tconf interval:           %f" % (self.conf_int))
-        log_func("\tna value:                %s" % (self.na_value))
-        log_func("\tsample set size min:     %d" % (self.sample_set_size_min))
-        log_func("\tsample set size max:     %d" % (self.sample_set_size_max))
-        log_func("\tsmx files:               %s" % (','.join(self.smx_files)))
-        log_func("\tsmt files:               %s" % (','.join(self.smt_files)))
-        log_func("\tnum metadata columns:    %s" % (self.num_metadata_cols))
-        log_func("\tweight matrix file:      %s" % (self.weight_matrix_file))
         log_func("\toutput directory:        %s" % (self.output_dir))
         log_func("----------------------------------")
 
     def get_json(self):
         d = {'name': self.name,
-             'version': self.version,
              'perms': self.perms,
              'weight_miss': self.weight_miss,
              'weight_hit': self.weight_hit,
@@ -155,16 +113,9 @@ class Config(object):
              'weight_noise': self.weight_noise,
              'create_html': self.create_html,
              'create_plots': self.create_plots,
-             'fdr_qval_threshold': self.fdr_qval_threshold,
+             'detailed_report_threshold': self.detailed_report_threshold,
              'plot_conf_int': self.plot_conf_int,
              'conf_int': self.conf_int,
-             'na_value': self.na_value,
-             'sample_set_size_min': self.sample_set_size_min,
-             'sample_set_size_max': self.sample_set_size_max,
-             'smx_files': self.smx_files,
-             'smt_files': self.smt_files,
-             'num_metadata_cols': self.num_metadata_cols,
-             'weight_matrix_file': self.weight_matrix_file,
              'output_dir': self.output_dir}
         return d
 
@@ -173,12 +124,10 @@ class Config(object):
         self.perms = max(1, args.perms)
         self.create_html = args.create_html
         self.create_plots = args.create_plots
-        self.fdr_qval_threshold = args.fdr_qval_threshold
+        self.detailed_report_threshold = args.detailed_report_threshold
         self.plot_conf_int = args.plot_conf_int
         self.conf_int = args.conf_int
         self.na_value = args.na_value
-        self.sample_set_size_min = args.sample_set_size_min
-        self.sample_set_size_max = args.sample_set_size_max
         self.name = args.name
         self.num_processors = args.num_processors
         self.num_metadata_cols = args.num_metadata_cols
@@ -202,24 +151,3 @@ class Config(object):
         if os.path.exists(self.output_dir):
             parser.error("output directory '%s' already exists" % 
                          (self.output_dir))
-        self.details_dir = os.path.join(self.output_dir, DETAILS_DIR)
-        # read sample sets
-        smx_files = []
-        if args.smx_files is not None:
-            for filename in args.smx_files:
-                if not os.path.exists(filename):
-                    parser.error("smx file '%s' not found" % (filename))
-                smx_files.append(filename)
-        self.smx_files = smx_files
-        smt_files = []
-        if args.smt_files is not None:
-            for filename in args.smt_files:
-                if not os.path.exists(filename):
-                    parser.error("smt file '%s' not found" % (filename))
-                smt_files.append(filename)
-        self.smt_files = smt_files
-        # read weights
-        if not os.path.exists(args.weight_matrix_file):
-            parser.error("weight matrix file '%s' not found" % 
-                         (args.weight_matrix_file))
-        self.weight_matrix_file = args.weight_matrix_file

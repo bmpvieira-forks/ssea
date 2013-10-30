@@ -3,6 +3,7 @@ Created on Oct 18, 2013
 
 @author: mkiyer
 '''
+import os
 import numpy as np
 import matplotlib.gridspec as gridspec
 from matplotlib import figure
@@ -10,6 +11,7 @@ from matplotlib import figure
 BOOL_DTYPE = np.uint8
 FLOAT_DTYPE = np.float
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
+
 
 class ParserError(Exception):
     '''Error parsing a file.'''
@@ -125,6 +127,30 @@ class WeightVector(object):
             yield WeightVector(name, metadata, samples, weights)
             lineno += 1
         fileh.close()
+        
+    @staticmethod
+    def from_data(rownames, samples, weight_matrix, na_value=np.nan):
+        '''
+        rownames: list of weight vector names
+        samples: list of samples        
+        weight_matrix is a 2d numpy ndarray with shape (rownames,samples)
+        na_value: value that indicates invalid/missing data
+        '''
+        assert len(rownames) == weight_matrix.shape[0]
+        assert len(samples) == weight_matrix.shape[1]
+        for i in xrange(len(rownames)):
+            name = rownames[i]
+            weights = []
+            nansamples = []
+            for j in xrange(weight_matrix.shape[1]):
+                val = weight_matrix[i,j]
+                if val == np.nan:
+                    continue
+                weights.append(val)
+                nansamples.append(samples[j])
+            yield WeightVector(name, metadata=[name], 
+                               samples=nansamples, 
+                               weights=weights)    
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
@@ -154,9 +180,10 @@ class Result(object):
     '''    
     '''
     def __init__(self):
+        self.weight_vec = None
+        self.sample_set = None
         self.weights = None
         self.samples = None
-        self.sample_set = None
         self.membership = None
         self.weights_miss = None
         self.weights_hit = None
@@ -249,12 +276,44 @@ class Result(object):
         return fig
        
     def get_details_table(self):
-        rows = [['index', 'sample', 'rank', 'weight', 'running_es', 
-                 'core_enrichment']]
+        rows = [['index', 'sample', 'rank', 'raw_weight', 
+                 'transformed_weight', 'running_es', 'core_enrichment']]
         member_inds = (self.membership > 0).nonzero()[0]
         for i,ind in enumerate(member_inds):
             is_enriched = int(ind <= self.es_run_ind)
-            rows.append([i, self.samples[ind], ind+1, self.weights[ind], 
-                         self.es_run[ind], is_enriched])
+            rows.append([i, self.samples[ind], ind+1, self.weights[ind],
+                         self.weights_hit[ind], self.es_run[ind], 
+                         is_enriched])
         return rows
+
+    def get_report_fields(self, name, desc):
+        # calculate leading edge stats
+        member_inds = (self.membership > 0).nonzero()[0]
+        le_num_hits = sum(ind <= self.es_run_ind 
+                          for ind in member_inds)
+        le_num_misses = self.es_run_ind - le_num_hits
+        num_misses = self.membership.shape[0] - len(self.sample_set)
+        sample_set_frac_le = float(le_num_hits) / len(self.sample_set)
+        null_set_frac_le = float(le_num_misses) / num_misses
+        if self.es_run_ind == 0:
+            le_frac_hits = 0.0
+        else:
+            le_frac_hits = float(le_num_hits) / self.es_run_ind
+        # write result to text file            
+        fields = [name, desc,
+                  self.sample_set.name, self.sample_set.desc, 
+                  len(self.sample_set), self.es, self.nes, self.pval, 
+                  self.qval, self.fwerp, 'NA', 'NA',
+                  self.es_run_ind,
+                  le_num_hits, le_frac_hits, 
+                  sample_set_frac_le,
+                  null_set_frac_le, '{}']
+        return fields
     
+class SSEA(object):
+    def __init__(self):        
+        pass
+
+
+
+
