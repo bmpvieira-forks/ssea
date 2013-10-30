@@ -29,6 +29,7 @@ class Config(object):
         self.plot_conf_int = True
         self.conf_int = 0.95
         self.create_html = True
+        self.create_plots = True
         self.output_dir = "SSEA_%s" % (timestamp())
     
     def get_argument_parser(self, parser=None):
