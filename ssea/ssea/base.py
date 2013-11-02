@@ -4,153 +4,26 @@ Created on Oct 18, 2013
 @author: mkiyer
 '''
 import os
+import argparse
+import logging
+import json
+from datetime import datetime
+from time import time
+import itertools
 import numpy as np
-import matplotlib.gridspec as gridspec
-from matplotlib import figure
 
 BOOL_DTYPE = np.uint8
 FLOAT_DTYPE = np.float
 WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
 
+class NumpyJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist() # or map(int, obj)
+        return json.JSONEncoder.default(self, obj)
 
-class ParserError(Exception):
-    '''Error parsing a file.'''
-    def __init__(self, msg):
-        super(ParserError).__init__(type(self))
-        self.msg = "ERROR: %s" % msg
-    def __str__(self):
-        return self.msg
-    def __unicode__(self):
-        return self.msg
-
-class SampleSet(object): 
-    def __init__(self, name=None, desc=None, value=None):
-        self.name = name
-        self.desc = desc
-        self.value = value
-    
-    def __len__(self):
-        return 0 if self.value is None else len(self.value)
-
-    def get_array(self, samples):
-        return np.array([x in self.value for x in samples], 
-                        dtype=BOOL_DTYPE)
-
-    @staticmethod
-    def parse_smx(filename):
-        fileh = open(filename)
-        names = fileh.next().rstrip('\n').split('\t')
-        descs = fileh.next().rstrip('\n').split('\t')
-        if len(names) != len(descs):
-            raise ParserError("Number of fields in differ in columns 1 and 2 of sample set file")
-        sample_sets = [SampleSet(name=n,desc=d,value=set()) for n,d in zip(names,descs)]
-        lineno = 3
-        for line in fileh:
-            if not line:
-                continue
-            line = line.rstrip('\n')
-            if not line:
-                continue
-            fields = line.split('\t')
-            for i,f in enumerate(fields):
-                if not f:
-                    continue
-                sample_sets[i].value.add(f)
-            lineno += 1
-        fileh.close()
-        return sample_sets
-
-    @staticmethod
-    def parse_smt(filename):
-        sample_sets = []
-        fileh = open(filename)    
-        for line in fileh:
-            fields = line.strip().split('\t')
-            name = fields[0]
-            desc = fields[1]
-            values = set(fields[2:])
-            sample_sets.append(SampleSet(name, desc, values))
-        fileh.close()
-        return sample_sets
-
-class WeightVector(object):    
-    def __init__(self, name=None, metadata=None, samples=None, weights=None):
-        self.name = name
-        self.metadata = metadata
-        self.samples = samples
-        self.weights = weights
-
-    @staticmethod
-    def parse_wmt(filename, na_value='NA', metadata_cols=None):
-        '''
-        generator function to parse a weight matrix and return WeightVector 
-        objects
-        
-        filename: string path to file
-        na_val: value corresponding to missing data 
-        '''
-        fileh = open(filename)
-        # try to get num metadata cols from comment in first line of file
-        line = fileh.next()        
-        if line.startswith('#'):
-            metadata_cols = int(line[1:].strip())
-            line = fileh.next()
-        if metadata_cols is None:
-            raise ParserError("Number of metadata columns not found in file "
-                              "and not set by user")
-        elif metadata_cols < 1:
-            raise ParserError("metadata_cols param must be >=1")
-        # read header of file
-        header_fields = line.strip().split('\t')            
-        lineno = 2
-        for line in fileh:
-            fields = line.strip().split('\t')
-            if len(fields) != len(header_fields):
-                raise ParserError("Number of fields in line %d of weight " 
-                                  "matrix file %s does not header" %
-                                  (lineno, filename))
-            name = fields[0]
-            metadata = fields[1:metadata_cols]
-            weights = []
-            samples = []            
-            for i in xrange(metadata_cols, len(fields)):
-                val = fields[i]
-                if val == na_value:
-                    continue
-                try:
-                    weights.append(float(val))
-                except ValueError:
-                    raise ParserError("Value %s at line number %d cannot be "
-                                      "converted to a floating point number" 
-                                      % (val, lineno))                                    
-                samples.append(header_fields[i])
-            yield WeightVector(name, metadata, samples, weights)
-            lineno += 1
-        fileh.close()
-        
-    @staticmethod
-    def from_data(rownames, samples, weight_matrix, na_value=-1):
-        '''
-        rownames: list of weight vector names
-        samples: list of samples        
-        weight_matrix is a 2d numpy ndarray with shape (rownames,samples)
-        na_value: value that indicates invalid/missing data
-        '''
-        assert len(rownames) == weight_matrix.shape[0]
-        assert len(samples) == weight_matrix.shape[1]
-        for i in xrange(len(rownames)):
-            name = rownames[i]
-            weights = []
-            nansamples = []
-            for j in xrange(weight_matrix.shape[1]):
-                val = weight_matrix[i,j]
-                if (val == na_value) or (val is na_value):
-                    continue
-                weights.append(val)
-                nansamples.append(samples[j])
-            yield WeightVector(name, metadata=[name], 
-                               samples=nansamples, 
-                               weights=weights)    
+def timestamp():
+    return datetime.fromtimestamp(time()).strftime('%Y-%m-%d-%H-%M-%S-%f')
 
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
@@ -176,144 +49,381 @@ def quantile(a, frac, limit=(), interpolation_method='fraction'):
                              "'lower' or 'higher'")
     return score
 
-class Result(object):
-    '''    
-    '''
-    def __init__(self):
-        self.weight_vec = None
-        self.sample_set = None
-        self.weights = None
-        self.samples = None
-        self.membership = None
-        self.weights_miss = None
-        self.weights_hit = None
-        self.es = 0.0
-        self.nes = 0.0
-        self.es_run_ind = 0
-        self.es_run = None
-        self.pval = 1.0
-        self.qval = 1.0
-        self.fwerp = 1.0
-        self.es_null = None
+class ParserError(Exception):
+    '''Error parsing a file.'''
+    def __init__(self, msg):
+        super(ParserError).__init__(type(self))
+        self.msg = "ERROR: %s" % msg
+    def __str__(self):
+        return self.msg
+    def __unicode__(self):
+        return self.msg
 
-    def plot_null_distribution(self, fig=None):
-        if fig is None:
-            fig = figure.Figure()
-        fig.clf()
-        percent_neg = (100. * (self.es_null < 0).sum() / 
-                       self.es_null.shape[0])
-        num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
-        #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
-        ax = fig.add_subplot(1,1,1)
-        ax.hist(self.es_null, bins=num_bins, histtype='bar')
-        ax.axvline(x=self.es, linestyle='--', color='black')
-        ax.set_title('Random ES distribution')
-        ax.set_ylabel('P(ES)')
-        ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % (percent_neg))
-        return fig
-
-    def plot(self, plot_conf_int=True, conf_int=0.95, fig=None):
-        if fig is None:
-            fig = figure.Figure()
-        fig.clf()
-        gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
-        # running enrichment score
-        ax0 = fig.add_subplot(gs[0])
-        x = np.arange(len(self.es_run))
-        y = self.es_run
-        ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
-        ax0.axhline(y=0, color='gray')
-        ax0.axvline(x=self.es_run_ind, lw=1, linestyle='--', color='black')
-        # confidence interval
-        if plot_conf_int:
-            if np.sign(self.es) < 0:
-                es_null_sign = self.es_null[self.es_null < 0]                
-            else:
-                es_null_sign = self.es_null[self.es_null >= 0]                
-            # plot confidence interval band
-            es_null_mean = es_null_sign.mean()
-            es_null_low = quantile(es_null_sign, 1.0-conf_int)
-            es_null_hi = quantile(es_null_sign, conf_int)
-            lower_bound = np.repeat(es_null_low, len(x))
-            upper_bound = np.repeat(es_null_hi, len(x))
-            ax0.axhline(y=es_null_mean, lw=2, color='red', ls=':')
-            ax0.fill_between(x, lower_bound, upper_bound,
-                             lw=0, facecolor='yellow', alpha=0.5,
-                             label='%.2f CI' % (100. * conf_int))
-            # here we use the where argument to only fill the region 
-            # where the ES is above the confidence interval boundary
-            if np.sign(self.es) < 0:
-                ax0.fill_between(x, y, lower_bound, where=y<lower_bound, 
-                                 lw=0, facecolor='blue', alpha=0.5)
-            else:
-                ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
-                                 lw=0, facecolor='blue', alpha=0.5)
-        ax0.set_xlim((0,len(self.es_run)))
-        ax0.grid(True)
-        ax0.set_xticklabels([])
-        ax0.set_ylabel('Enrichment score (ES)')
-        ax0.set_title('Enrichment plot: %s' % (self.sample_set.name))
-        # membership in sample set
-        ax1 = fig.add_subplot(gs[1])
-        ax1.vlines(self.membership.nonzero()[0], ymin=0, ymax=1, lw=0.5, 
-                   color='black', label='Hits')
-        ax1.set_xlim((0,len(self.es_run)))
-        ax1.set_ylim((0,1))
-        ax1.set_xticks([])
-        ax1.set_yticks([])
-        ax1.set_xticklabels([])
-        ax1.set_yticklabels([])
-        ax1.set_ylabel('Set')
-        # weights
-        ax2 = fig.add_subplot(gs[2])
-        ax2.plot(self.weights_miss, color='blue')
-        ax2.plot(self.weights_hit, color='red')
-        ax2.set_xlim((0,len(self.es_run)))
-        ax2.set_xlabel('Samples')
-        ax2.set_ylabel('Weights')
-        # draw
-        fig.tight_layout()
-        return fig
-       
-    def get_details_table(self):
-        rows = [['index', 'sample', 'rank', 'raw_weight', 
-                 'transformed_weight', 'running_es', 'core_enrichment']]
-        member_inds = (self.membership > 0).nonzero()[0]
-        for i,ind in enumerate(member_inds):
-            is_enriched = int(ind <= self.es_run_ind)
-            rows.append([i, self.samples[ind], ind+1, self.weights[ind],
-                         self.weights_hit[ind], self.es_run[ind], 
-                         is_enriched])
-        return rows
-
-    def get_report_fields(self, name, desc):
-        # calculate leading edge stats
-        member_inds = (self.membership > 0).nonzero()[0]
-        le_num_hits = sum(ind <= self.es_run_ind 
-                          for ind in member_inds)
-        le_num_misses = self.es_run_ind - le_num_hits
-        num_misses = self.membership.shape[0] - len(self.sample_set)
-        sample_set_frac_le = float(le_num_hits) / len(self.sample_set)
-        null_set_frac_le = float(le_num_misses) / num_misses
-        if self.es_run_ind == 0:
-            le_frac_hits = 0.0
-        else:
-            le_frac_hits = float(le_num_hits) / self.es_run_ind
-        # write result to text file            
-        fields = [name, desc,
-                  self.sample_set.name, self.sample_set.desc, 
-                  len(self.sample_set), self.es, self.nes, self.pval, 
-                  self.qval, self.fwerp, 'NA', 'NA',
-                  self.es_run_ind,
-                  le_num_hits, le_frac_hits, 
-                  sample_set_frac_le,
-                  null_set_frac_le, '{}']
-        return fields
+class Config(object):
+    # constants
+    ES_NULL_NUM_BINS = 101
+    ES_NULL_BINS = np.linspace(-1.0, 1.0, num=ES_NULL_NUM_BINS)
+    # constants
+    MEMMAP_DTYPE = 'float32'
+    SAMPLES_JSON_FILE = 'samples.json'
+    METADATA_JSON_FILE = 'metadata.json'
+    WEIGHTS_FILE = 'weights.memmap'
+    SAMPLE_SETS_JSON_FILE = 'sample_sets.json'
+    CONFIG_JSON_FILE = 'config.json'
+    RESULTS_JSON_FILE = 'results.json.gz'
+    OUTPUT_HISTS_FILE = 'es_hists.npz'
     
-class SSEA(object):
-    def __init__(self):        
+    def __init__(self):
+        self.num_processes = 1
+        self.output_dir = "SSEA_%s" % (timestamp())
+        self.name = 'myssea'
+        self.perms = 1000
+        self.weight_miss = 'log'
+        self.weight_hit = 'log'
+        self.weight_const = 1.1
+        self.weight_noise = 0.1
+
+    def to_json(self):
+        return json.dumps(self.__dict__)
+
+    def update_argument_parser(self, parser=None):
+        if parser is None:
+            parser = argparse.ArgumentParser()
+        grp = parser.add_argument_group("SSEA Options")
+        grp.add_argument('-p', '--num-processes', dest='num_processes',
+                         type=int, default=1,
+                         help='Number of processor cores available '
+                         '[default=%(default)s]')
+        grp.add_argument('-o', '--output-dir', dest="output_dir", 
+                         help='Output directory [default=%(default)s]')
+        grp.add_argument('-n', '--name', dest="name", default=self.name,
+                         help='Analysis name [default=%(default)s]')
+        grp.add_argument('--perms', type=int, default=self.perms,
+                         help='Number of permutations '
+                         '[default=%(default)s]')
+        grp.add_argument('--weight-miss', dest='weight_miss',
+                         choices=WEIGHT_METHODS, 
+                         default=self.weight_miss,
+                         help='Weighting method for elements not in set ' 
+                         '[default=%(default)s]')
+        grp.add_argument('--weight-hit', dest='weight_hit', 
+                         choices=WEIGHT_METHODS, 
+                         default=self.weight_hit,
+                         help='Weighting method for elements in set '
+                         '[default=%(default)s]')
+        grp.add_argument('--weight-const', dest='weight_const', type=float,
+                         default=self.weight_const,
+                         help='Constant floating-point number to add to '
+                         'all weights prior to transformation '
+                         '[default=%(default)s]')
+        grp.add_argument('--weight-noise', dest='weight_noise', type=float,
+                         default=self.weight_noise,
+                         help='Add uniform noise in the range [0.0-X) to '
+                         'the weights to increase robustness '
+                         '[default=%(default)s]') 
+        return parser
+
+    def log(self, log_func=logging.info):
+        log_func("Parameters")
+        log_func("----------------------------------")
+        log_func("name:                    %s" % (self.name))
+        log_func("output directory:        %s" % (self.output_dir))
+        log_func("num processes:           %d" % (self.num_processes))
+        log_func("permutations:            %d" % (self.perms))
+        log_func("weight method miss:      %s" % (self.weight_miss))
+        log_func("weight method hit:       %s" % (self.weight_hit))
+        log_func("weight constant:         %f" % (self.weight_const))
+        log_func("weight noise:            %s" % (self.weight_noise))
+        log_func("----------------------------------")
+
+    def parse_args(self, parser, args):
+        # process and check arguments
+        self.name = args.name
+        self.num_processes = args.num_processes
+        self.perms = max(1, args.perms)
+        # check weight methods and constant
+        self.weight_miss = str(args.weight_miss)
+        self.weight_hit = str(args.weight_hit)
+        self.weight_const = args.weight_const
+        self.weight_noise = args.weight_noise
+        if self.weight_const < 0.0:
+            parser.error('weight const < 0.0 invalid')
+        if (self.weight_const - self.weight_noise) < 0.0:            
+            parser.error('weight const minus noise < 0.0 invalid')
+        elif ((self.weight_miss == 'log' or self.weight_hit == 'log')):
+            if self.weight_const < 1.0:
+                parser.error('weight constant %f < 1.0 not allowed with '
+                             'log method' % (self.weight_const))
+            if (self.weight_const - self.weight_noise) < 1.0:
+                parser.error('weight constant minus noise is < 1.0')
+        # output directory
+        self.output_dir = args.output_dir
+        if os.path.exists(self.output_dir):
+            parser.error("output directory '%s' already exists" % 
+                         (self.output_dir))
+
+class Metadata(object):
+    __slots__ = ('_id', 'name', 'params')
+    
+    def __init__(self, _id=None, name=None, params=None):
+        '''
+        _id: unique integer id (will be auto-generated if not provided)
+        name: string name
+        params: dictionary of parameter-value data
+        '''
+        self._id = _id
+        self.name = name
+        self.params = {}
+        if params is not None:
+            self.params.update(params)
+
+    def __repr__(self):
+        return ("<%s(_id=%d,name=%s,params=%s" % 
+                (self.__class__.__name__, self._id, self.name, 
+                 self.params))
+    def __eq__(self, other):
+        return self._id == other._id
+    def __ne__(self, other):
+        return self._id != other._id
+    def __hash__(self):
+        return hash(self._id)
+
+    def to_json(self):
+        d = dict(self.params)
+        d.update({'_id': self._id,
+                  'name': self.name})
+        return json.dumps(d)
+    
+    @staticmethod
+    def parse_tsv(filename, id_iter=None):
+        '''
+        parse tab-delimited file containing sample information        
+        first row contains column headers
+        first column must contain sample name
+        remaining columns contain metadata
+        '''
+        if id_iter is None:
+            id_iter = itertools.count()
+        fileh = open(filename)
+        header_fields = fileh.next().strip().split('\t')
+        for line in fileh:
+            fields = line.strip().split('\t')
+            name = fields[0]
+            metadata = dict(zip(header_fields[1:],fields[1:]))
+            yield Metadata(id_iter.next(), name, metadata)
+        fileh.close()
+        
+
+class SampleSet(object): 
+    def __init__(self, _id=None, name=None, desc=None, sample_ids=None):
+        '''
+        _id: unique integer id (will be auto-generated if not provided)
+        name: string name of sample set
+        desc: string description of sample set 
+        sample_ids: list of unique integer ids corresponding to samples
+        '''
+        self._id = _id
+        self.name = name
+        self.desc = desc
+        self.sample_ids = set()
+        if sample_ids is not None:
+            self.sample_ids.update(sample_ids)
+
+    def __repr__(self):
+        return ("<%s(_id=%d,name=%s,desc=%s,sample_ids=%s" % 
+                (self.__class__.__name__, self._id, self.name, self.desc,
+                 self.sample_ids))
+    
+    def __len__(self):
+        return len(self.sample_ids)
+
+    def get_array(self, all_ids):
+        return np.array([x in self.sample_ids for x in all_ids], 
+                        dtype=BOOL_DTYPE)
+
+    def to_json(self):
+        d = {'_id': self._id,
+             'name': self.name,
+             'desc': self.desc,
+             'sample_ids': list(self.sample_ids)}
+        return json.dumps(d)
+
+    @staticmethod
+    def remove_duplicates(sample_sets):
+        '''
+        compare all sample sets and remove duplicates
+        
+        sample_sets: list of SampleSet objects
+        '''
+        # TODO: write this
         pass
 
+    @staticmethod
+    def parse_smx(filename, samples, id_iter=None):
+        '''
+        filename: smx formatted file
+        samples: list of all samples in the experiment
+        '''
+        if id_iter is None:
+            id_iter = itertools.count()
+        fileh = open(filename)
+        names = fileh.next().rstrip('\n').split('\t')
+        descs = fileh.next().rstrip('\n').split('\t')
+        if len(names) != len(descs):
+            raise ParserError('Number of fields in differ in columns 1 and 2 '
+                              'of sample set file')
+        # get name -> _id map of samples
+        name_id_map = dict((s.name, s._id) for s in samples)            
+        # create empty sample sets
+        sample_sets = [SampleSet(id_iter.next(),n,d) 
+                       for n,d in zip(names,descs)]
+        lineno = 3
+        for line in fileh:
+            if not line:
+                continue
+            line = line.rstrip('\n')
+            if not line:
+                continue
+            fields = line.split('\t')
+            for i,name in enumerate(fields):
+                if not name:
+                    continue
+                if name not in name_id_map:
+                    raise ParserError('Unrecognized sample name "%s" in '
+                                      'sample set "%s"' 
+                                      % (name, sample_sets[i].name))
+                sample_id = name_id_map[name]
+                sample_sets[i].sample_ids.add(sample_id)
+            lineno += 1
+        fileh.close()
+        return sample_sets
 
+    @staticmethod
+    def parse_smt(filename, samples, id_iter=None):
+        '''
+        filename: smt formatted file
+        samples: list of all samples in the experiment
+        '''
+        if id_iter is None:
+            id_iter = itertools.count()
+        # get name -> _id map of samples
+        name_id_map = dict((s.name, s._id) for s in samples)
+        sample_sets = []
+        fileh = open(filename)
+        for line in fileh:
+            fields = line.strip().split('\t')
+            name = fields[0]
+            desc = fields[1]
+            sample_ids = []
+            for sample_name in fields[2:]:
+                if sample_name not in name_id_map:
+                    raise ParserError('Unrecognized sample name "%s" in '
+                                      'sample set "%s"' 
+                                      % (sample_name, name))
+                sample_ids.append(name_id_map[sample_name])
+            sample_sets.append(SampleSet(id_iter.next(), name, desc, sample_ids))
+        fileh.close()
+        return sample_sets
 
+def weight_matrix_tsv_to_memmap(tsv_file, output_file,
+                                row_metadata=None,
+                                col_metadata=None, 
+                                na_values=None,
+                                dtype='float32'): 
+    '''
+    convert/copy a tab-delimited file containing numeric weight data
+    to a numpy memmap file.    
+    
+    tsv_file: string path to tab-delimited matrix file
+    mmap_file: string path to mmap output file
+    row_metadata: list of Metadata objects corresponding to rows in file
+    col_metadata: list of Metadata objects corresponding to columns in file 
+    na_val: set of values corresponding to missing data 
+    '''
+    if na_values is None:
+        na_values = set(['NA'])
+    else:
+        na_values = set(na_values)
+        
+    if col_metadata is None:
+        # create new Metadata from column names
+        fileh = open(tsv_file, 'r')
+        header_fields = fileh.next().strip().split('\t')
+        id_iter = itertools.count()
+        col_metadata = [Metadata(id_iter.next(), f) 
+                        for f in header_fields[1:]]
+        fileh.close()
+    if row_metadata is None:
+        # create new Metadata from row names
+        row_metadata = []
+        id_iter = itertools.count()
+        with open(tsv_file, 'r') as fileh:
+            fileh.next() # skip header
+            for line in fileh:
+                name = line.strip().split('\t',1)[0]
+                row_metadata.append(Metadata(id_iter.next(), name))
+    # check column metadata for correctness 
+    fileh = open(tsv_file)
+    header_fields = fileh.next().strip().split('\t')
+    assert len(col_metadata) == (len(header_fields)-1)
+    # check that column names are in correct order
+    for i in xrange(len(col_metadata)):
+        assert col_metadata[i].name == header_fields[i+1]
+    # create mmap file
+    mat = np.memmap(output_file, dtype=dtype, mode='w+', 
+                    shape=(len(row_metadata), len(col_metadata)))
+    # write matrix data (converting missing values to np.nan)
+    for i,line in enumerate(fileh):
+        fields = line.strip().split('\t')
+        # check row metadata
+        assert fields[0] == row_metadata[i].name
+        # convert to floats and store in mmap      
+        mat[i,:] = [(np.nan if x in na_values else float(x))
+                    for x in fields[1:]]
+    fileh.close()
+    del mat
+    return row_metadata, col_metadata
 
+def weight_matrix_memmap_copy(input_file, output_file,
+                              row_metadata,
+                              col_metadata,
+                              dtype='float32'):
+    '''
+    copy a numpy memmap file
+    
+    input_file: input memmap file
+    output_file: output memmap file
+    row_metadata: Metadata objects for each row
+    col_metadata: Metadata objects for each column
+    dtype: numpy dtype of input array e.g. 'float32'
+    '''
+    # input memmap file
+    inp = np.memmap(input_file, dtype=dtype, mode='r', 
+                    shape=(len(row_metadata),len(col_metadata)))
+    # output memmap file
+    outp = np.memmap(output_file, dtype=dtype, mode='w+', 
+                     shape=(len(row_metadata), len(col_metadata)))
+    # copy
+    outp[:] = inp
+    del outp
+    del inp
+     
+class Result(object):
+    FIELDS = ('t_id', 'ss_id', 'es', 'nes', 'nominal_p_value',
+              'fdr_q_value', 'fwer_p_value', 'rank_at_max',
+              'core_hits', 'core_misses', 'null_hits', 'null_misses',
+              'es_null_hist', 'es_null_mean', 'es_null_percent_neg',
+              'global_nes', 'global_fdr_q_value')
+    
+    def __init__(self):
+        for x in Result.FIELDS:
+            setattr(self, x, None)
+    def to_json(self):
+        return json.dumps(self.__dict__, cls=NumpyJSONEncoder)
+    @staticmethod
+    def from_json(s):
+        d = json.loads(s)
+        res = Result()
+        for f in Result.FIELDS:
+            setattr(res, f, d.get(f, None))
+        return res

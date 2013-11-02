@@ -72,11 +72,11 @@ def rld2d(list lengths,
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
-def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights,
-                np.ndarray[FLOAT_t, ndim=1] weights_miss,
-                np.ndarray[FLOAT_t, ndim=1] weights_hit,
-                np.ndarray[UINT8_t, ndim=2] membership,
-                np.ndarray[INT_t, ndim=1] perm):
+def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights not None,
+                np.ndarray[FLOAT_t, ndim=1] weights_miss not None,
+                np.ndarray[FLOAT_t, ndim=1] weights_hit not None,
+                np.ndarray[UINT8_t, ndim=2] membership not None,
+                np.ndarray[INT_t, ndim=1] perm not None):
     assert weights_miss.dtype == FLOAT_DTYPE
     assert weights_hit.dtype == FLOAT_DTYPE
     assert membership.dtype == UINT8_DTYPE
@@ -88,20 +88,22 @@ def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights,
     cdef np.ndarray[FLOAT_t, ndim=2] es_runs
     cdef np.ndarray[FLOAT_t, ndim=1] es_vals
     cdef np.ndarray[INT_t, ndim=1] es_run_inds
+    cdef np.ndarray[INT_t, ndim=1] cumlengths
     cdef int offset, i, ix, j, p, length
-    cdef int nsamples, nsets
+    cdef int nlengths, nsets
     cdef float wt_hit, wt_miss
     cdef list lengths
     # init variables
     lengths = run_lengths(weights)    
-    nsamples = len(lengths)
+    nlengths = len(lengths)
     nsets = membership.shape[1]
-    phit = np.empty((nsamples,nsets), dtype=FLOAT_DTYPE)
-    pmiss = np.empty((nsamples,nsets), dtype=FLOAT_DTYPE)
+    phit = np.empty((nlengths,nsets), dtype=FLOAT_DTYPE)
+    pmiss = np.empty((nlengths,nsets), dtype=FLOAT_DTYPE)
+    cumlengths = np.empty(nlengths, dtype=INT_DTYPE)
     # evaluate the fraction of samples in S "hits" and the fraction of 
     # samples not in S "misses" present up to a given position i in L
     offset = 0
-    for i in xrange(nsamples):
+    for i in xrange(nlengths):
         # run length encoding ensures that tied weights get added to same 
         # index of the hit/miss array, so all samples have identical weight
         # each each index
@@ -109,11 +111,12 @@ def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights,
         wt_miss = weights_miss[offset]
         wt_hit = weights_hit[offset]        
         # calculate cumulative sum of hits and misses at this index
-        for j in xrange(nsets):
-            if i == 0:
+        if i == 0:
+            for j in xrange(nsets):
                 phit[i,j] = 0
                 pmiss[i,j] = 0
-            else:
+        else:
+            for j in xrange(nsets):
                 phit[i,j] = phit[i-1,j]
                 pmiss[i,j] = pmiss[i-1,j]
         for ix in xrange(offset, offset+length):
@@ -124,11 +127,12 @@ def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights,
                 else:
                     pmiss[i,j] += wt_miss
         offset += length
+        cumlengths[i] = offset
     # normalize cumulative sums and handle cases where a sample set has a 
     # cumulative sum of zero
     norm_miss = np.empty(nsets, dtype=FLOAT_DTYPE)
     norm_hit = np.empty(nsets, dtype=FLOAT_DTYPE)
-    i = nsamples - 1 # last index
+    i = nlengths - 1 # last index
     for j in xrange(nsets):
         norm_miss[j] = pmiss[i,j] if pmiss[i,j] > 0 else 1.0
         norm_hit[j] = phit[i,j] if phit[i,j] > 0 else 1.0
@@ -143,7 +147,9 @@ def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] weights,
     for j,ix in enumerate(es_run_inds):
         es_vals[j] = es_runs[ix,j]
     # decode run length encoded results
-    es_run_inds = np.array([sum(lengths[:x]) for x in es_run_inds])
+    for j in xrange(nsets):
+        es_run_inds[j] = cumlengths[es_run_inds[j]]    
+    #es_run_inds = np.array([sum(lengths[:i]) for i in es_run_inds])
     es_runs = rld2d(lengths, es_runs)
     return es_vals, es_run_inds, es_runs
 

@@ -19,26 +19,22 @@ import sys
 import os
 import argparse
 import logging
-
-# set matplotlib backend
-import matplotlib
-matplotlib.use('Agg')
+import numpy as np
 
 __all__ = []
 
 DEBUG = 1
-PROFILE = 0
+PROFILE = 1
 
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.config import Config
-from ssea.base import SampleSet, WeightVector
+from ssea.base import SampleSet, Config, Metadata, \
+    weight_matrix_tsv_to_memmap, weight_matrix_memmap_copy
 from ssea.algo import ssea_main
 
 # default command line options
-DEFAULT_SMIN = 10
+DEFAULT_SMIN = 1
 DEFAULT_SMAX = 0
-DEFAULT_METACOLS = None
 DEFAULT_NA_VALUE = 'NA'
 
 def main(argv=None):
@@ -72,33 +68,38 @@ USAGE
     # Setup argument parser
     parser = argparse.ArgumentParser(description=program_license)
     # Add command line parameters
-    config.get_argument_parser(parser)
+    config.update_argument_parser(parser)
     parser.add_argument("-v", "--verbose", dest="verbose", 
                         action="store_true", default=False, 
                         help="set verbosity level [default: %(default)s]")
     parser.add_argument('-V', '--version', action='version', 
                         version=program_version_message)
-    parser.add_argument('--smin', dest="sample_set_size_min", type=int,
+    parser.add_argument('--smin', dest="smin", type=int,
                         default=DEFAULT_SMIN, metavar="N",
                         help='Exclude sample sets smaller than N '
-                        'from the analysis')
-    parser.add_argument('--smax', dest="sample_set_size_max", type=int,
+                        'from the analysis [default=%(default)s]')
+    parser.add_argument('--smax', dest="smax", type=int,
                         default=DEFAULT_SMAX, metavar="N",
                         help='Exclude sample sets larger than N '
-                        'from the analysis')
+                        'from the analysis [default=%(default)s]')
     parser.add_argument('--smx', dest="smx_files", action='append',
                         help='File(s) containing sets in column format')
     parser.add_argument('--smt', dest="smt_files", action='append',
                         help='File(s) containing sets in row format')
-    parser.add_argument('--metacols', type=int, dest='num_metadata_cols',
-                        default=DEFAULT_METACOLS,
-                        help='Number of columns of metadata in weight '
-                        'matrix file [default=%(default)s]')
-    parser.add_argument('--na-value', dest='na_value', 
-                        default=DEFAULT_NA_VALUE,
+    parser.add_argument('--colmeta', dest='col_metadata_file',
+                        help='file containing metadata corresponding to each '
+                        'column of the weight matrix file')
+    parser.add_argument('--rowmeta', dest='row_metadata_file',
+                        help='file containing metadata corresponding to each '
+                        'row of the weight matrix file')
+    parser.add_argument('--na-value', dest='na_values', 
+                        default=[DEFAULT_NA_VALUE], action='append',
                         help='Value to interpret as missing/invalid '
                         'in weight matrix [default=%(default)s]')
-    parser.add_argument('weight_matrix_file', 
+    grp = parser.add_mutually_exclusive_group(required=True)
+    grp.add_argument('--memmap', action="store_true")
+    grp.add_argument('--tsv', action="store_true")
+    parser.add_argument('matrix_file', 
                         help='File containing weight matrix')
     # Process arguments
     args = parser.parse_args()
@@ -112,6 +113,23 @@ USAGE
     # initialize configuration
     config.parse_args(parser, args)
     config.log()
+    # sample set size limits
+    smin = max(1, args.smin)
+    smax = max(0, args.smax)
+    # check metadata
+    if args.row_metadata_file is not None:
+        if not os.path.exists(args.row_metadata_file):
+            parser.error('row metadata file "%s" not found' % (args.row_metadata_file))
+    if args.col_metadata_file is not None:
+        if not os.path.exists(args.col_metadata_file):
+            parser.error('col metadata file "%s" not found' % (args.col_metadata_file))
+    # check matrix file
+    if not os.path.exists(args.matrix_file):
+        parser.error('matrix file "%s" not found' % (args.matrix_file))
+    if args.memmap and ((args.row_metadata_file is None) or 
+                        (args.col_metadata_file is None)):
+        parser.error("Must specify row/col metadata with memmap weight "
+                     "matrix input")
     # check sample sets
     smx_files = []
     if args.smx_files is not None:
@@ -125,44 +143,75 @@ USAGE
             if not os.path.exists(filename):
                 parser.error("smt file '%s' not found" % (filename))
             smt_files.append(filename)
-    # check weights file
-    if not os.path.exists(args.weight_matrix_file):
-        parser.error("weight matrix file '%s' not found" % 
-                     (args.weight_matrix_file))
+    if len(smx_files) == 0 and len(smt_files) == 0:
+        parser.error("No sample sets specified")
+    # read metadata
+    if args.row_metadata_file is not None:
+        logging.info("Reading row metadata")
+        row_metadata = Metadata.parse_tsv(args.row_metadata_file)
+    else:
+        row_metadata = None
+    if args.col_metadata_file is not None:
+        logging.info("Reading column metadata")
+        col_metadata = Metadata.parse_tsv(args.col_metadata_file)
+    else:
+        col_metadata = None
+    # setup output directory
+    if not os.path.exists(config.output_dir):
+        logging.info("Creating output directory '%s'" % 
+                     (config.output_dir))
+        os.makedirs(config.output_dir)
+    # read/process weight matrix
+    logging.info("Converting matrix file")
+    weights_file = os.path.join(config.output_dir, Config.WEIGHTS_FILE)
+    if args.memmap:
+        weight_matrix_memmap_copy(args.matrix_file, weights_file,
+                                  row_metadata,
+                                  col_metadata,
+                                  dtype=Config.MEMMAP_DTYPE)
+    elif args.tsv:
+        row_metadata, col_metadata = \
+            weight_matrix_tsv_to_memmap(args.matrix_file, weights_file,
+                                        row_metadata=row_metadata,
+                                        col_metadata=col_metadata,
+                                        na_values=args.na_values,
+                                        dtype=Config.MEMMAP_DTYPE)
     # read sample sets
     logging.info("Reading sample sets")
     sample_sets = []
     for filename in smx_files:
         logging.debug("\tFile: %s" % (filename))
-        sample_sets.extend(SampleSet.parse_smx(filename))
+        sample_sets.extend(SampleSet.parse_smx(filename, col_metadata))
     for filename in smt_files:
         logging.debug("\tFile: %s" % (filename))
-        sample_sets.extend(SampleSet.parse_smt(filename))
+        sample_sets.extend(SampleSet.parse_smt(filename, col_metadata))
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:
-        if ((args.sample_set_size_min > 0) and
-            (len(sample_set.value) < args.sample_set_size_min)):
+        if ((smin > 0) and (len(sample_set) < smin)):
             logging.warning("\tsample set %s excluded because size %d < %d" %                              
-                            (sample_set.name, len(sample_set.value), 
-                             args.sample_set_size_min))
+                            (sample_set.name, len(sample_set), smin))
             continue        
-        if ((args.sample_set_size_max > 0) and 
-            (len(sample_set.value) > args.sample_set_size_max)):
+        if ((smax > 0) and (len(sample_set) > smax)):
             logging.warning("\tsample set %s excluded because size %d > %d" % 
-                            (sample_set.name, len(sample_set.value), 
-                             args.sample_set_size_max))
+                            (sample_set.name, len(sample_set), smax))
             continue
-        logging.debug("\tsample set %s size %d" % (sample_set.name, len(sample_set)))
+        logging.debug("\tsample set %s size %d" % 
+                      (sample_set.name, len(sample_set)))
         filtered_sample_sets.append(sample_set)
-    logging.info("\tNumber of filtered sample sets: %d" % (len(filtered_sample_sets)))
+    logging.info("\tNumber of filtered sample sets: %d" % 
+                 (len(filtered_sample_sets)))
+    # TODO: remove duplicate sample sets
     sample_sets = filtered_sample_sets
-    # parse weight matrix file
-    weight_vec_iter = WeightVector.parse_wmt(args.weight_matrix_file, 
-                                             na_value=args.na_value,
-                                             metadata_cols=args.num_metadata_cols)
-    # run
-    ssea_main(weight_vec_iter, sample_sets, config)
+    # re-assign contiguous identifiers
+    for i,sample_set in enumerate(sample_sets):
+        sample_set._id = i
+    # run ssea
+    mat = np.memmap(weights_file, dtype=Config.MEMMAP_DTYPE, mode='r', 
+                    shape=(len(row_metadata),len(col_metadata)))
+    ssea_main(mat, row_metadata, col_metadata, sample_sets, config)
+    # cleanup
+    del mat
     return 0
 
 if __name__ == "__main__":
