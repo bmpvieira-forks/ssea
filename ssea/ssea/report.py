@@ -7,9 +7,9 @@ import sys
 import os
 import argparse
 import gzip
-import json
 import logging
 import shutil
+import re
 from multiprocessing import Process, Queue
 
 # set matplotlib backend
@@ -39,6 +39,11 @@ env = Environment(loader=PackageLoader("ssea", "templates"),
 
 # matplotlib static figure for plotting
 global_fig = plt.figure(0)
+
+OP_TEST_FUNCS = {'<=': lambda a,b: a<=b,
+                 '>=': lambda a,b: a>=b,
+                 '<': lambda a,b: a<b,
+                 '>': lambda a,b: a>b}
 
 class ReportConfig(object):
     def __init__(self):
@@ -93,7 +98,7 @@ class ReportConfig(object):
         log_func("create plots:            %s" % (self.create_plots))
         log_func("plot conf interval:      %s" % (self.plot_conf_int))
         log_func("conf interval:           %f" % (self.conf_int))
-        log_func("thresholds:              %s" % (str(self.thresholds)))
+        log_func("thresholds:              %s" % (','.join(''.join(map(str,t)) for t in self.thresholds)))
         log_func("----------------------------------")
 
     def parse_args(self, parser, args):
@@ -106,12 +111,16 @@ class ReportConfig(object):
         # parse threshold arguments of the form 'attribute,value'
         # for example: nominal_p_value,0.05
         for arg in args.thresholds:
-            attr, value = arg.split(',')
-            value = float(value)
+            m = re.match(r'(.+)([<>]=?)(.+)', arg)
+            if m is None:
+                parser.error('error parsing threshold argument "%s"' % (arg))
+            attr, op, value = m.groups()
             if attr not in Result.FIELDS:
                 parser.error('threshold attribute "%s" unknown' % (attr))
-            # TODO: implement <,<=,>,>= operators         
-            self.thresholds.append((attr,value))       
+            if op not in OP_TEST_FUNCS:
+                parser.error('unrecognized operator "%s"' % (op))
+            value = float(value)
+            self.thresholds.append((attr,op,value))       
         # check input directory
         if not os.path.exists(args.input_dir):
             parser.error("input directory '%s' not found" % (args.input_dir))
@@ -131,7 +140,10 @@ class SSEAData:
         rows = [['index', 'sample', 'rank', 'raw_weight', 'transformed_weight', 
                  'running_es', 'core_enrichment']]
         for i,ind in enumerate(self.hit_indexes):
-            is_enriched = int(ind <= self.rank_at_max)
+            if self.es < 0:
+                is_enriched = int(ind <= self.rank_at_max)
+            else:                
+                is_enriched = int(ind >= self.rank_at_max)
             meta = sample_metadata[self.sample_ids[ind]]
             rows.append([i, meta.name, ind+1, self.raw_weights[ind], 
                          self.tx_weights_hit[ind], self.running_es[ind],
@@ -341,20 +353,44 @@ def create_detailed_report(result, sample_ids, weights, rowmeta, colmeta,
         d['html'] = details_html
     return d
 
-def _producer_process(input_queue, filename, config):
+def create_html_report(input_file, output_file, row_metadata, sample_sets, 
+                       runconfig):
+    logging.debug("Writing HTML report")
+    def _result_parser(filename):
+        with open(filename, 'r') as fp:
+            for line in fp:
+                result = Result.from_json(line.strip())
+                rowmeta = row_metadata[result.t_id]
+                sample_set = sample_sets[result.ss_id]
+                result.sample_set_name = sample_set.name
+                result.sample_set_desc = sample_set.desc
+                result.sample_set_size = len(sample_set.sample_ids)
+                result.name = rowmeta.name
+                yield result
+    t = env.get_template('report.html')
+    with open(output_file, 'w') as fp:
+        print >>fp, t.render(name=runconfig.name,
+                         results=_result_parser(input_file))
+
+def parse_and_filter_results(filename, thresholds):
     with gzip.open(filename, 'rb') as fin:
         for line in fin:
             # load json document (one per line)
             result = Result.from_json(line.strip())      
             # apply thresholds
             skip = False
-            for attr,threshold in config.thresholds:
-                if getattr(result, attr) >= threshold:
+            for attr,op,threshold in thresholds:
+                value = getattr(result, attr)
+                if not OP_TEST_FUNCS[op](value, threshold):
                     skip = True
                     break
             if skip:
                 continue
-            input_queue.put(result)
+            yield result
+
+def _producer_process(input_queue, filename, config):
+    for result in parse_and_filter_results(filename, config.thresholds):
+        input_queue.put(result)
     # tell consumers to stop
     for i in xrange(config.num_processes):
         input_queue.put(None)
@@ -458,22 +494,9 @@ def report_parallel(config):
     # produce report
     if config.create_html:
         logging.debug("Writing HTML report")
-        def _result_parser(filename):
-            with open(filename, 'r') as fp:
-                for line in fp:
-                    result = Result.from_json(line.strip())
-                    rowmeta = row_metadata[result.t_id]
-                    sample_set = sample_sets[result.ss_id]
-                    result.sample_set_name = sample_set.name
-                    result.sample_set_desc = sample_set.desc
-                    result.sample_set_size = len(sample_set.sample_ids)
-                    result.name = rowmeta.name
-                    yield result
-        t = env.get_template('report.html')
-        fp = open(os.path.join(config.output_dir, 'filtered_results.html'), 'w')
-        print >>fp, t.render(name=runconfig.name,
-                             results=_result_parser(filtered_results_file))
-        fp.close()
+        html_file = os.path.join(config.output_dir, 'filtered_results.html')
+        create_html_report(filtered_results_file, html_file,
+                           row_metadata, sample_sets, runconfig)
     logging.debug("Done.")
 
 def report(config):
@@ -510,24 +533,13 @@ def report(config):
                               mode='r', 
                               shape=shape)
     # write filtered results to output file
-    filtered_results_file = os.path.join(config.output_dir, 'filtered_results.json')
+    filtered_results_file = os.path.join(config.output_dir, 
+                                         'filtered_results.json')
     fout = open(filtered_results_file, 'w')
-    # parse report json
-    json_file = os.path.join(config.input_dir, Config.RESULTS_JSON_FILE)
-    fin = gzip.open(json_file, 'rb')
+    # parse report json    
     logging.info("Processing results")
-    for line in fin:
-        # load json document (one per line)
-        result = Result.from_json(line.strip())      
-        # apply thresholds
-        skip = False
-        for attr,threshold in config.thresholds:
-            if getattr(result, attr) >= threshold:
-                skip = True
-                break
-        if skip:
-            logging.debug("Skipping %d %d" % (result.t_id, result.ss_id)) 
-            continue
+    json_file = os.path.join(config.input_dir, Config.RESULTS_JSON_FILE)
+    for result in parse_and_filter_results(json_file, config.thresholds):
         # get weights
         weights = np.array(weight_matrix[result.t_id,:], dtype=np.float)
         # remove 'nan' values        
@@ -545,26 +557,15 @@ def report(config):
         result.files = d
         # write result to tab-delimited text
         print >>fout, result.to_json()
-    fin.close()
     fout.close()
+    # produce report
     if config.create_html:
-        def result_parser(filename):
-            with open(filename, 'r') as fp:
-                for line in fp:
-                    result = Result.from_json(line.strip())
-                    rowmeta = row_metadata[result.t_id]
-                    sample_set = sample_sets[result.ss_id]
-                    result.sample_set_name = sample_set.name
-                    result.sample_set_desc = sample_set.desc
-                    result.sample_set_size = len(sample_set.sample_ids)
-                    result.name = rowmeta.name
-                    yield result
-        t = env.get_template('report.html')
-        fp = open(os.path.join(config.output_dir, 'filtered_results.html'), 'w')
-        print >>fp, t.render(name=runconfig.name,
-                             results=result_parser(filtered_results_file))
-        fp.close()
-
+        logging.debug("Writing HTML report")
+        html_file = os.path.join(config.output_dir, 'filtered_results.html')
+        create_html_report(filtered_results_file, html_file,
+                           row_metadata, sample_sets, runconfig)
+    logging.debug("Done.")
+    return 0
 
 def main(argv=None):
     '''Command line options.'''    
@@ -615,543 +616,10 @@ USAGE
     # initialize configuration
     config.parse_args(parser, args)
     config.log()
-    
-    #report(config)
-    report_parallel(config)
-    return 0
+    #return report_parallel(config)
+    return report(config)
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-
-# def enrichment_plot(d, plot_conf_int=True, conf_int=0.95, fig=None):
-#     if fig is None:
-#         fig = plt.Figure()
-#     else:
-#         fig.clf()
-#     gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
-#     # running enrichment score
-#     ax0 = fig.add_subplot(gs[0])
-#     x = np.arange(len(d[Result.RUNNING_ES]))
-#     y = d[Result.RUNNING_ES]
-#     ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
-#     ax0.axhline(y=0, color='gray')
-#     ax0.axvline(x=d[Result.RANK_AT_MAX], lw=1, linestyle='--', color='black')
-#     # confidence interval
-#     if plot_conf_int:
-#         # determine confidence interval band
-#         es = d[Result.ES]
-#         es_null_mean = d[Result.ES_NULL_MEAN]
-#         bins = np.array(d[Result.ES_NULL_BINS])
-#         bin_left_edges = bins[:-1]
-#         h = np.array(d[Result.ES_NULL_HIST])
-#         if es < 0:
-#             sign_inds = (bin_left_edges <= 0).nonzero()[0]
-#         else:
-#             sign_inds = (bin_left_edges >= 0).nonzero()[0]
-#         bins_sign = bin_left_edges[sign_inds]
-#         h_sign = h[sign_inds]
-#         h_norm = h_sign.cumsum() / float(h_sign.sum())
-#         left = 1 + h_norm.searchsorted((1.0 - conf_int), side='right')
-#         left = left.clip(0,len(h)-1)
-#         right = h_norm.searchsorted(conf_int, side='left')
-#         right = right.clip(0,len(h)-1)
-#         # TODO: interpolate
-#         es_null_low = bins_sign[left]
-#         es_null_hi = bins_sign[right]
-#         lower_bound = np.repeat(es_null_low, len(x))
-#         upper_bound = np.repeat(es_null_hi, len(x))
-#         ax0.axhline(y=es_null_mean, lw=2, color='red', ls=':')
-#         ax0.fill_between(x, lower_bound, upper_bound,
-#                          lw=0, facecolor='yellow', alpha=0.5,
-#                          label='%.2f CI' % (100. * conf_int))
-#         # here we use the where argument to only fill the region 
-#         # where the ES is above the confidence interval boundary
-#         if d[Result.ES] < 0:
-#             ax0.fill_between(x, y, lower_bound, where=y<lower_bound, 
-#                              lw=0, facecolor='blue', alpha=0.5)
-#         else:
-#             ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
-#                              lw=0, facecolor='blue', alpha=0.5)
-#     ax0.set_xlim((0,len(d[Result.RUNNING_ES])))
-#     ax0.grid(True)
-#     ax0.set_xticklabels([])
-#     ax0.set_ylabel('Enrichment score (ES)')
-#     ax0.set_title('Enrichment plot: %s' % (d[Result.SS_NAME]))
-#     # membership in sample set
-#     ax1 = fig.add_subplot(gs[1])
-#     ax1.vlines(d[Result.MEMBERSHIP].nonzero()[0], ymin=0, ymax=1, lw=0.5, 
-#                color='black', label='Hits')
-#     ax1.set_xlim((0,len(d[Result.RUNNING_ES])))
-#     ax1.set_ylim((0,1))
-#     ax1.set_xticks([])
-#     ax1.set_yticks([])
-#     ax1.set_xticklabels([])
-#     ax1.set_yticklabels([])
-#     ax1.set_ylabel('Set')
-#     # weights
-#     ax2 = fig.add_subplot(gs[2])
-#     ax2.plot(d[Result.TX_WEIGHTS_MISS], color='blue')
-#     ax2.plot(d[Result.TX_WEIGHTS_HIT], color='red')
-#     ax2.set_xlim((0,len(d[Result.RUNNING_ES])))
-#     ax2.set_xlabel('Samples')
-#     ax2.set_ylabel('Weights')
-#     # draw
-#     fig.tight_layout()
-#     return fig
-
-# 
-# 
-# class Result(object):
-#     def __init__(self):
-#         self.name = None
-#         self.desc = None
-#         self.sample_set_name = None
-#         self.sample_set_desc = None        
-#         self.samples = None
-#         self.membership = None
-#         self.weights = None
-#         self.weights_miss = None
-#         self.weights_hit = None
-#         self.es = 0.0
-#         self.nes = 0.0
-#         self.es_run_ind = 0
-#         self.es_run = None
-#         self.pval = 1.0
-#         self.qval = 1.0
-#         self.fwerp = 1.0
-#         self.es_null = None
-# 
-#     def to_json(self):
-#         '''
-#         get json document representation of object
-#         '''
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         sample_set_size = len(member_inds)
-#         num_misses = self.membership.shape[0] - sample_set_size
-#         # calculate leading edge stats
-#         if self.es < 0:
-#             le_num_hits = sum(i >= self.es_run_ind for i in member_inds)
-#             le_num_misses = self.membership.shape[0] - self.es_run_ind
-#             if self.es_run_ind == 0:
-#                 le_frac_hits = 0.0
-#             else:
-#                 le_frac_hits = float(le_num_hits) / self.es_run_ind
-#         else:
-#             le_num_hits = sum(i <= self.es_run_ind for i in member_inds)
-#             le_num_misses = 1 + self.es_run_ind - le_num_hits
-#             if self.es_run_ind == 0:
-#                 le_frac_hits = 0.0
-#             else:
-#                 le_frac_hits = float(le_num_hits) / (1+self.es_run_ind)
-#         sample_set_frac_le = float(le_num_hits) / sample_set_size
-#         null_set_frac_le = float(le_num_misses) / num_misses
-#         # histogram of null distribution
-#         num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
-# 
-#         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
-#         ax = fig.add_subplot(1,1,1)
-#         ax.hist(self.es_null, bins=num_bins, histtype='bar')
-# 
-#         
-#         
-#         # build json document
-#         d = {'name': self.weight_vec.name,
-#              'desc': self.weight_vec.desc,
-#              'sample_set_name': self.sample_set.name,
-#              'sample_set_desc': self.sample_set.desc,
-#              'sample_set_size': sample_set_size,
-#              'es': self.es,
-#              'nes': self.nes,
-#              'nominal_p_value': self.pval,
-#              'fdr_q_value': self.qval,
-#              'fwer_p_value': self.fwerp,
-#              'global_nes': 'NA',
-#              'global_fdr_q_value': 'NA',
-#              'rank_at_max': self.es_run_ind,
-#              'leading_edge_num_hits': le_num_hits,
-#              'leading_edge_frac_hits': le_frac_hits,
-#              'sample_set_frac_in_leading_edge': sample_set_frac_le,
-#              'null_set_frac_in_leading_edge': null_set_frac_le}
-# 
-# 
-#         # get detailed report
-#         rows = [['index', 'sample', 'rank', 'raw_weight', 
-#                  'transformed_weight', 'running_es', 'core_enrichment']]
-#         for i,ind in enumerate(member_inds):
-#             is_enriched = int(ind <= self.es_run_ind)
-#             rows.append([i, self.samples[ind], ind+1, self.weights[ind],
-#                          self.weights_hit[ind], self.es_run[ind], 
-#                          is_enriched])        
-# 
-#         return d
-#    
-#     def get_details_table(self):
-#         rows = [['index', 'sample', 'rank', 'raw_weight', 
-#                  'transformed_weight', 'running_es', 'core_enrichment']]
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         for i,ind in enumerate(member_inds):
-#             is_enriched = int(ind <= self.es_run_ind)
-#             rows.append([i, self.samples[ind], ind+1, self.weights[ind],
-#                          self.weights_hit[ind], self.es_run[ind], 
-#                          is_enriched])
-#         return rows
-# 
-#     def get_report_fields(self, name, desc):
-#         # calculate leading edge stats
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         le_num_hits = sum(ind <= self.es_run_ind 
-#                           for ind in member_inds)
-#         le_num_misses = self.es_run_ind - le_num_hits
-#         num_misses = self.membership.shape[0] - len(self.sample_set)
-#         sample_set_frac_le = float(le_num_hits) / len(self.sample_set)
-#         null_set_frac_le = float(le_num_misses) / num_misses
-#         if self.es_run_ind == 0:
-#             le_frac_hits = 0.0
-#         else:
-#             le_frac_hits = float(le_num_hits) / self.es_run_ind
-#         # write result to text file            
-#         fields = [name, desc,
-#                   self.sample_set.name, self.sample_set.desc, 
-#                   len(self.sample_set), self.es, self.nes, self.pval, 
-#                   self.qval, self.fwerp, 'NA', 'NA',
-#                   self.es_run_ind,
-#                   le_num_hits, le_frac_hits, 
-#                   sample_set_frac_le,
-#                   null_set_frac_le, '{}']
-#         return fields
-
-
-# 
-# 
-# 
-# class Report(object):
-#     # header fields for report
-#     FIELDS = ['name', 
-#               'desc',
-#               'sample_set_name',
-#               'sample_set_desc',
-#               'sample_set_size',
-#               'es',
-#               'nes',
-#               'nominal_p_value',
-#               'fdr_q_value',
-#               'fwer_p_value',
-#               'global_nes',
-#               'global_fdr_q_value',
-#               'rank_at_max',
-#               'leading_edge_num_hits',
-#               'leading_edge_frac_hits',
-#               'sample_set_frac_in_leading_edge',
-#               'null_set_frac_in_leading_edge',
-#               'details']
-#     FIELD_MAP = dict((v,k) for k,v in enumerate(FIELDS))
-# 
-#     @staticmethod
-#     def parse(filename):
-#         '''
-#         parses lines of the report file produced by SSEA and 
-#         generates dictionaries using the first line of the file
-#         containing the header fields
-#         '''
-#         fileh = open(filename, 'r')
-#         header_fields = fileh.next().strip().split('\t')
-#         details_ind = header_fields.index('details')
-#         for line in fileh:
-#             fields = line.strip().split('\t')
-#             fields[details_ind] = json.loads(fields[details_ind])
-#             yield dict(zip(header_fields, fields))
-#         fileh.close()
-# 
-# def create_detailed_report(name, desc, res, details_dir, config):
-#     '''
-#     Generate detailed report files including enrichment plots and 
-#     a tab-delimited text file showing the running ES score and rank
-#     of each member in the sample set
-# 
-#     name: string
-#     desc: string
-#     res: base.Result object
-#     details_dir: path to write files
-#     config: config.Config object
-#     
-#     returns dict containing files written
-#     '''
-#     d = {}
-#     if config.create_plots:
-#         # create enrichment plot
-#         res.plot(plot_conf_int=config.plot_conf_int,
-#                  conf_int=config.conf_int, fig=global_fig)    
-#         # save plots
-#         eplot_png = '%s.%s.eplot.png' % (name, res.sample_set.name)
-#         eplot_pdf = '%s.%s.eplot.pdf' % (name, res.sample_set.name)
-#         global_fig.savefig(os.path.join(details_dir, eplot_png))
-#         global_fig.savefig(os.path.join(details_dir, eplot_pdf))
-#         # create null distribution plot
-#         res.plot_null_distribution(fig=global_fig)
-#         nplot_png = '%s.%s.null.png' % (name, res.sample_set.name)
-#         nplot_pdf = '%s.%s.null.pdf' % (name, res.sample_set.name)
-#         global_fig.savefig(os.path.join(details_dir, nplot_png))        
-#         global_fig.savefig(os.path.join(details_dir, nplot_pdf))
-#         d.update({'eplot_png': eplot_png,
-#                   'nplot_png': nplot_png})
-#         d.update({'eplot_pdf': eplot_pdf,
-#                   'nplot_pdf': nplot_pdf})
-#     # write detailed report
-#     details_rows = res.get_details_table()
-#     details_tsv = '%s.%s.tsv' % (name, res.sample_set.name)
-#     fp = open(os.path.join(details_dir, details_tsv), 'w')
-#     for fields in details_rows:
-#         print >>fp, '\t'.join(map(str,fields))
-#     fp.close()
-#     d['tsv'] = details_tsv
-#     # render to html
-#     if config.create_html:
-#         fields = res.get_report_fields(name, desc)
-#         result_dict = dict(zip(Report.FIELDS, fields))
-#         details_html = '%s.%s.html' % (name, res.sample_set.name)
-#         t = env.get_template('details.html')
-#         fp = open(os.path.join(details_dir, details_html), 'w')
-#         print >>fp, t.render(res=result_dict, 
-#                              files=d,
-#                              details=details_rows)
-#         fp.close()
-#         d['html'] = details_html
-#     return d
-# 
-# 
-
-# 
-# 
-# class Result(object):
-#     '''    
-#     '''
-#     def __init__(self):
-#         self.t_id = None
-#         self.ss_id = None
-#         
-#         
-#         self.weight_vec = None
-#         self.sample_set = None
-#         self.weights = None
-#         self.samples = None
-#         self.membership = None
-#         self.weights_miss = None
-#         self.weights_hit = None
-#         self.es = 0.0
-#         self.nes = 0.0
-#         self.es_run_ind = 0
-#         self.es_run = None
-#         self.pval = 1.0
-#         self.qval = 1.0
-#         self.fwerp = 1.0
-#         self.es_null = None
-# 
-#     def get_details_table(self):
-#         rows = [['index', 'sample', 'rank', 'raw_weight', 
-#                  'transformed_weight', 'running_es', 'core_enrichment']]
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         for i,ind in enumerate(member_inds):
-#             is_enriched = int(ind <= self.es_run_ind)
-#             rows.append([i, self.samples[ind], ind+1, self.weights[ind],
-#                          self.weights_hit[ind], self.es_run[ind], 
-#                          is_enriched])
-#         return rows
-# 
-#     def to_json(self):
-#         '''
-#         get json document representation of object
-#         '''
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         sample_set_size = len(member_inds)
-#         num_misses = self.membership.shape[0] - sample_set_size
-#         # calculate leading edge stats
-#         if self.es < 0:
-#             le_num_hits = sum(i >= self.es_run_ind for i in member_inds)
-#             le_num_misses = self.membership.shape[0] - self.es_run_ind
-#             if self.es_run_ind == 0:
-#                 le_frac_hits = 0.0
-#             else:
-#                 le_frac_hits = float(le_num_hits) / self.es_run_ind
-#         else:
-#             le_num_hits = sum(i <= self.es_run_ind for i in member_inds)
-#             le_num_misses = 1 + self.es_run_ind - le_num_hits
-#             if self.es_run_ind == 0:
-#                 le_frac_hits = 0.0
-#             else:
-#                 le_frac_hits = float(le_num_hits) / (1+self.es_run_ind)
-#         sample_set_frac_le = float(le_num_hits) / sample_set_size
-#         null_set_frac_le = float(le_num_misses) / num_misses
-#         # get detailed report
-#         rows = [['index', 'sample', 'rank', 'raw_weight', 
-#                  'transformed_weight', 'running_es', 'core_enrichment']]
-#         for i,ind in enumerate(member_inds):
-#             is_enriched = int(ind <= self.es_run_ind)
-#             rows.append([i, self.samples[ind], ind+1, self.weights[ind],
-#                          self.weights_hit[ind], self.es_run[ind], 
-#                          is_enriched])        
-#         # build json document
-#         d = {'name': self.weight_vec.name,
-#              'desc': self.weight_vec.desc,
-#              'sample_set_name': self.sample_set.name,
-#              'sample_set_desc': self.sample_set.desc,
-#              'sample_set_size': sample_set_size,
-#              'es': self.es,
-#              'nes': self.nes,
-#              'nominal_p_value': self.pval,
-#              'fdr_q_value': self.qval,
-#              'fwer_p_value': self.fwerp,
-#              'global_nes': 'NA',
-#              'global_fdr_q_value': 'NA',
-#              'rank_at_max': self.es_run_ind,
-#              'leading_edge_num_hits': le_num_hits,
-#              'leading_edge_frac_hits': le_frac_hits,
-#              'sample_set_frac_in_leading_edge': sample_set_frac_le,
-#              'null_set_frac_in_leading_edge': null_set_frac_le}
-#         
-# 
-#     def get_report_fields(self, name, desc):
-#         # calculate leading edge stats
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         le_num_hits = sum(ind <= self.es_run_ind 
-#                           for ind in member_inds)
-#         le_num_misses = self.es_run_ind - le_num_hits
-#         num_misses = self.membership.shape[0] - len(self.sample_set)
-#         sample_set_frac_le = float(le_num_hits) / len(self.sample_set)
-#         null_set_frac_le = float(le_num_misses) / num_misses
-#         if self.es_run_ind == 0:
-#             le_frac_hits = 0.0
-#         else:
-#             le_frac_hits = float(le_num_hits) / self.es_run_ind
-#         # write result to text file            
-#         fields = [name, desc,
-#                   self.sample_set.name, self.sample_set.desc, 
-#                   len(self.sample_set), self.es, self.nes, self.pval, 
-#                   self.qval, self.fwerp, 'NA', 'NA',
-#                   self.es_run_ind,
-#                   le_num_hits, le_frac_hits, 
-#                   sample_set_frac_le,
-#                   null_set_frac_le, '{}']
-#         return fields
-# 
-#         
-# 
-#     def plot_null_distribution(self, fig=None):
-#         if fig is None:
-#             fig = figure.Figure()
-#         fig.clf()
-#         percent_neg = (100. * (self.es_null < 0).sum() / 
-#                        self.es_null.shape[0])
-#         num_bins = int(round(float(self.es_null.shape[0]) ** (1./2.)))
-#         #n, bins, patches = ax.hist(es_null, bins=num_bins, histtype='stepfilled')
-#         ax = fig.add_subplot(1,1,1)
-#         ax.hist(self.es_null, bins=num_bins, histtype='bar')
-#         ax.axvline(x=self.es, linestyle='--', color='black')
-#         ax.set_title('Random ES distribution')
-#         ax.set_ylabel('P(ES)')
-#         ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % (percent_neg))
-#         return fig
-# 
-#     def plot(self, plot_conf_int=True, conf_int=0.95, fig=None):
-#         if fig is None:
-#             fig = figure.Figure()
-#         fig.clf()
-#         gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
-#         # running enrichment score
-#         ax0 = fig.add_subplot(gs[0])
-#         x = np.arange(len(self.es_run))
-#         y = self.es_run
-#         ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
-#         ax0.axhline(y=0, color='gray')
-#         ax0.axvline(x=self.es_run_ind, lw=1, linestyle='--', color='black')
-#         # confidence interval
-#         if plot_conf_int:
-#             if np.sign(self.es) < 0:
-#                 es_null_sign = self.es_null[self.es_null < 0]                
-#             else:
-#                 es_null_sign = self.es_null[self.es_null >= 0]                
-#             # plot confidence interval band
-#             es_null_mean = es_null_sign.mean()
-#             es_null_low = quantile(es_null_sign, 1.0-conf_int)
-#             es_null_hi = quantile(es_null_sign, conf_int)
-#             lower_bound = np.repeat(es_null_low, len(x))
-#             upper_bound = np.repeat(es_null_hi, len(x))
-#             ax0.axhline(y=es_null_mean, lw=2, color='red', ls=':')
-#             ax0.fill_between(x, lower_bound, upper_bound,
-#                              lw=0, facecolor='yellow', alpha=0.5,
-#                              label='%.2f CI' % (100. * conf_int))
-#             # here we use the where argument to only fill the region 
-#             # where the ES is above the confidence interval boundary
-#             if np.sign(self.es) < 0:
-#                 ax0.fill_between(x, y, lower_bound, where=y<lower_bound, 
-#                                  lw=0, facecolor='blue', alpha=0.5)
-#             else:
-#                 ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
-#                                  lw=0, facecolor='blue', alpha=0.5)
-#         ax0.set_xlim((0,len(self.es_run)))
-#         ax0.grid(True)
-#         ax0.set_xticklabels([])
-#         ax0.set_ylabel('Enrichment score (ES)')
-#         ax0.set_title('Enrichment plot: %s' % (self.sample_set.name))
-#         # membership in sample set
-#         ax1 = fig.add_subplot(gs[1])
-#         ax1.vlines(self.membership.nonzero()[0], ymin=0, ymax=1, lw=0.5, 
-#                    color='black', label='Hits')
-#         ax1.set_xlim((0,len(self.es_run)))
-#         ax1.set_ylim((0,1))
-#         ax1.set_xticks([])
-#         ax1.set_yticks([])
-#         ax1.set_xticklabels([])
-#         ax1.set_yticklabels([])
-#         ax1.set_ylabel('Set')
-#         # weights
-#         ax2 = fig.add_subplot(gs[2])
-#         ax2.plot(self.weights_miss, color='blue')
-#         ax2.plot(self.weights_hit, color='red')
-#         ax2.set_xlim((0,len(self.es_run)))
-#         ax2.set_xlabel('Samples')
-#         ax2.set_ylabel('Weights')
-#         # draw
-#         fig.tight_layout()
-#         return fig
-#        
-#     def get_details_table(self):
-#         rows = [['index', 'sample', 'rank', 'raw_weight', 
-#                  'transformed_weight', 'running_es', 'core_enrichment']]
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         for i,ind in enumerate(member_inds):
-#             is_enriched = int(ind <= self.es_run_ind)
-#             rows.append([i, self.samples[ind], ind+1, self.weights[ind],
-#                          self.weights_hit[ind], self.es_run[ind], 
-#                          is_enriched])
-#         return rows
-# 
-#     def get_report_fields(self, name, desc):
-#         # calculate leading edge stats
-#         member_inds = (self.membership > 0).nonzero()[0]
-#         le_num_hits = sum(ind <= self.es_run_ind 
-#                           for ind in member_inds)
-#         le_num_misses = self.es_run_ind - le_num_hits
-#         num_misses = self.membership.shape[0] - len(self.sample_set)
-#         sample_set_frac_le = float(le_num_hits) / len(self.sample_set)
-#         null_set_frac_le = float(le_num_misses) / num_misses
-#         if self.es_run_ind == 0:
-#             le_frac_hits = 0.0
-#         else:
-#             le_frac_hits = float(le_num_hits) / self.es_run_ind
-#         # write result to text file            
-#         fields = [name, desc,
-#                   self.sample_set.name, self.sample_set.desc, 
-#                   len(self.sample_set), self.es, self.nes, self.pval, 
-#                   self.qval, self.fwerp, 'NA', 'NA',
-#                   self.es_run_ind,
-#                   le_num_hits, le_frac_hits, 
-#                   sample_set_frac_le,
-#                   null_set_frac_le, '{}']
-#         return fields
-#     
-
-
 
 
