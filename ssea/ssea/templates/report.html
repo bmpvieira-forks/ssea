@@ -33,7 +33,6 @@ $(document).ready(function() {
 <th>Index</th>
 <th>Details</th>
 <th>Name</th>
-<th>Description</th>
 <th>Sample Set</th>
 <th>Sample Set Description</th>
 <th>Sample Set Size</th>
@@ -45,10 +44,10 @@ $(document).ready(function() {
 <th>GLOBAL NES</th>
 <th>GLOBAL FDR q-val</th>
 <th>Rank at maximum running ES</th>
-<th>Leading edge hits</th>
-<th>Fraction LE hits</th>
-<th>Fraction set in LE</th>
-<th>Fraction null in LE</th>
+<th>Core hits</th>
+<th>Core misses</th>
+<th>Null hits</th>
+<th>Null misses</th>
 </tr>
 </thead>
 
@@ -57,12 +56,11 @@ $(document).ready(function() {
 <tr>
 <td>{{ loop.index }}</td>
 <td>
-{% if 'html' in res.details %}
-  <a href="{{ details_dir }}/{{ res.details['html'] }}">Link</a>
+{% if 'html' in res.files %}
+  <a href="{{ res.files['html'] }}">Link</a>
 {% endif %}
 </td>
 <td>{{ res.name }}</td>
-<td>{{ res.desc }}</td>
 <td>{{ res.sample_set_name }}</td>
 <td>{{ res.sample_set_desc }}</td>
 <td>{{ res.sample_set_size }}</td>
@@ -74,10 +72,10 @@ $(document).ready(function() {
 <td>{{ res.global_nes }}</td>
 <td>{{ res.global_fdr_q_value }}</td>
 <td>{{ res.rank_at_max }}</td>
-<td>{{ res.leading_edge_num_hits }}</td>
-<td>{{ res.leading_edge_frac_hits }}</td>
-<td>{{ res.sample_set_frac_in_leading_edge }}</td>
-<td>{{ res.null_set_frac_in_leading_edge }}</td>
+<td>{{ res.core_hits }}</td>
+<td>{{ res.core_misses }}</td>
+<td>{{ res.null_hits }}</td>
+<td>{{ res.null_misses }}</td>
 </tr>
 {% endfor %}
 </tbody>

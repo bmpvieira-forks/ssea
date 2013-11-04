@@ -163,15 +163,18 @@ USAGE
         os.makedirs(config.output_dir)
     # read/process weight matrix
     logging.info("Converting matrix file")
-    weights_file = os.path.join(config.output_dir, Config.WEIGHTS_FILE)
+    weight_matrix_file = os.path.join(config.output_dir, 
+                                      Config.WEIGHT_MATRIX_FILE)
     if args.memmap:
-        weight_matrix_memmap_copy(args.matrix_file, weights_file,
+        weight_matrix_memmap_copy(args.matrix_file, 
+                                  weight_matrix_file,
                                   row_metadata,
                                   col_metadata,
                                   dtype=Config.MEMMAP_DTYPE)
     elif args.tsv:
         row_metadata, col_metadata = \
-            weight_matrix_tsv_to_memmap(args.matrix_file, weights_file,
+            weight_matrix_tsv_to_memmap(args.matrix_file, 
+                                        weight_matrix_file,
                                         row_metadata=row_metadata,
                                         col_metadata=col_metadata,
                                         na_values=args.na_values,
@@ -207,11 +210,7 @@ USAGE
     for i,sample_set in enumerate(sample_sets):
         sample_set._id = i
     # run ssea
-    mat = np.memmap(weights_file, dtype=Config.MEMMAP_DTYPE, mode='r', 
-                    shape=(len(row_metadata),len(col_metadata)))
-    ssea_main(mat, row_metadata, col_metadata, sample_sets, config)
-    # cleanup
-    del mat
+    ssea_main(weight_matrix_file, row_metadata, col_metadata, sample_sets, config)
     return 0
 
 if __name__ == "__main__":

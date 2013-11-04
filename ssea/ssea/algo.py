@@ -6,15 +6,13 @@ Created on Oct 9, 2013
 import os
 import logging
 import shutil
-import json
 import gzip
-import itertools
-from multiprocessing import Process, JoinableQueue
+from multiprocessing import Process
 import numpy as np
 
 # local imports
 from kernel import ssea_kernel
-from base import BOOL_DTYPE, Config, Result, Metadata
+from base import BOOL_DTYPE, Config, Result, Metadata, chunk
 
 # enrichment score histogram bins
 NUM_BINS = 10000
@@ -26,8 +24,6 @@ BIN_CENTERS_POS = (BINS_POS[:-1] + BINS_POS[1:]) / 2.
 # results directories
 TMP_DIR = 'tmp'
 TMP_JSON_FILE = 'tmp.json.gz'
-
-
 
 def transform_weights(weights, method):
     if method == 'unweighted':
@@ -173,7 +169,7 @@ def ssea_run(sample_ids, weights, sample_sets,
         # calculate leading edge stats
         if es_vals[j] < 0:
             core_hits = sum(i >= es_run_inds[j] for i in hit_inds)
-            core_misses = membership.shape[0] - es_run_inds[j]
+            core_misses = (membership.shape[0] - es_run_inds[j]) - core_hits
         else:
             core_hits = sum(i <= es_run_inds[j] for i in hit_inds)
             core_misses = 1 + es_run_inds[j] - core_hits
@@ -201,17 +197,24 @@ def ssea_run(sample_ids, weights, sample_sets,
         res.es_null_hist = h
         yield res, es_null[:,j]
 
-def ssea_serial(weight_matrix, sample_sets, config, output_json_file, 
-                output_hist_file, startrow=None, endrow=None):
+def ssea_serial(weight_matrix_file, shape, sample_sets, config, 
+                output_json_file, output_hist_file, 
+                startrow=None, endrow=None):
     '''
     main SSEA loop (single processor)
     
-    weight_matrix: matrix containing numeric data 
+    weight_matrix_file: numpy memmap matrix containing numeric data 
+    shape: tuple with shape of weight matrix (nrows,ncols)
     sample_sets: list of SampleSet objects
     config: Config object
     output_json_file: filename for writing results (JSON format)
     output_hist_file: filename for writing ES histograms
     '''
+    # open weight matrix memmap
+    weight_matrix = np.memmap(weight_matrix_file, 
+                              dtype=Config.MEMMAP_DTYPE, 
+                              mode='r', 
+                              shape=shape)
     # determine range of matrix to process
     if startrow is None:
         startrow = 0
@@ -226,7 +229,7 @@ def ssea_serial(weight_matrix, sample_sets, config, output_json_file,
     # setup report file
     outfileh = gzip.open(output_json_file, 'wb')    
     for i in xrange(startrow, endrow):
-        logging.debug("\tRow: %d/%d" % (i+1,endrow-startrow))
+        logging.debug("\tRow: %d (%d-%d)" % (i, startrow, endrow))
         # read from memmap
         weights = np.array(weight_matrix[i,:], dtype=np.float)
         # remove 'nan' values        
@@ -254,69 +257,51 @@ def ssea_serial(weight_matrix, sample_sets, config, output_json_file,
     outfileh.close()
     # save histograms to a file
     np.savez(output_hist_file, **es_hists)
+    # cleanup
+    del weight_matrix
+    
 
-def ssea_parallel(weight_vecs, sample_sets, config, output_json_file, 
-                  output_hist_file): 
+def ssea_parallel(weight_matrix_file, shape, sample_sets, config, 
+                  output_json_file, output_hist_file): 
     '''
     main SSEA loop (multiprocessing implementation)
     
     See ssea_serial function for documentation
     '''
-    def worker(input_queue, sample_sets, config, json_file, hist_file): 
-        def queue_iter(q):
-            while True:
-                obj = q.get()
-                if (obj is None):
-                    break
-                yield obj
-                input_queue.task_done()
-            input_queue.task_done()
-        # initialize output file
-        ssea_serial(queue_iter(input_queue), sample_sets, config, 
-                    json_file, hist_file)
-    # create temp directory
-    tmp_dir = os.path.join(config.output_dir, "tmp")
-    if not os.path.exists(tmp_dir):
-        logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
-        os.makedirs(tmp_dir)
-    # create multiprocessing queue for passing data
-    input_queue = JoinableQueue(maxsize=config.num_processors*3)
     # start worker processes
+    tmp_dir = os.path.join(config.output_dir, TMP_DIR)
     procs = []
+    chunks = []
     worker_json_files = []
     worker_hist_files = []
-    try:
-        for i in xrange(config.num_processors):
-            json_file = os.path.join(tmp_dir, "w%03d.json" % (i))
-            worker_json_files.append(json_file)
-            hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
-            worker_hist_files.append(hist_file)
-            args = (input_queue, sample_sets, config, json_file, hist_file) 
-            p = Process(target=worker, args=args)
-            p.start()
-            procs.append(p)
-        # parse weight vectors
-        for weight_vec in weight_vecs:
-            input_queue.put(weight_vec)
-    finally:
-        # stop workers
-        for p in procs:
-            input_queue.put(None)
-        # close queue
-        input_queue.close()
-        input_queue.join()
-        # join worker processes
-        for p in procs:
-            p.join()
+    # divide matrix rows across processes
+    for startrow,endrow in chunk(shape[0], config.num_processes):
+        i = len(procs)
+        logging.debug("Worker process %d range %d-%d (%d total rows)" % 
+                      (i, startrow, endrow, (endrow-startrow)))
+        # worker output files
+        json_file = os.path.join(tmp_dir, "w%03d.json" % (i))
+        hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
+        worker_json_files.append(json_file)
+        worker_hist_files.append(hist_file)
+        args = (weight_matrix_file, shape, sample_sets, config, 
+                json_file, hist_file, startrow, endrow)        
+        p = Process(target=ssea_serial, args=args)
+        p.start()
+        procs.append(p)
+        chunks.append((startrow,endrow))
+    # join worker processes (wait for processes to finish)
+    for p in procs:
+        p.join()
     # merge workers
-    logging.info("Merging %d worker results" % (config.num_processors))
+    logging.info("Merging %d worker results" % (len(procs)))
     fout = open(output_json_file, 'wb')
     # setup global ES histograms
     es_hists = {'null_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
                 'null_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
                 'obs_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
                 'obs_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)}
-    for i in xrange(config.num_processors):        
+    for i in xrange(len(procs)):        
         # merge json files
         with open(worker_json_files[i], 'rb') as fin:
             shutil.copyfileobj(fin, fout)      
@@ -338,7 +323,7 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
     hists_obs_pos = npzfile['obs_pos']
     hists_obs_neg = npzfile['obs_neg']
     npzfile.close()
-    # compute totals
+    # compute totals (avoid division by zero)
     hists_null_pos_counts = hists_null_pos.sum(axis=1)
     hists_null_neg_counts = hists_null_neg.sum(axis=1)
     hists_obs_pos_counts = hists_obs_pos.sum(axis=1)
@@ -377,9 +362,15 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
     fin.close()
     fout.close()
 
-
-def ssea_main(weight_matrix, row_metadata, col_metadata, sample_sets, 
+def ssea_main(weight_matrix_file, row_metadata, col_metadata, sample_sets, 
               config):
+    '''
+    weight_matrix_file: numpy memmap with 2D weight data
+    row_metadata: list of Metadata objects corresponding to rows
+    col_metadata: list of Metadata objects corresponding to columns
+    sample_sets: list of SampleSet objects
+    config: Config object
+    '''
     # setup output directory
     if not os.path.exists(config.output_dir):
         logging.debug("Creating output directory '%s'" % 
@@ -393,16 +384,16 @@ def ssea_main(weight_matrix, row_metadata, col_metadata, sample_sets,
     # output files
     tmp_json_file = os.path.join(tmp_dir, TMP_JSON_FILE)
     es_hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
+    shape = (len(row_metadata),len(col_metadata))
     if config.num_processes > 1:
         logging.info("Running SSEA in parallel with %d processes" % 
-                     (config.num_processors))
-        # TODO: fix parallel
-        ssea_parallel(weight_matrix, sample_sets, config, tmp_json_file, 
-                      es_hists_file)
+                     (config.num_processes))
+        ssea_parallel(weight_matrix_file, shape, sample_sets, config, 
+                      tmp_json_file, es_hists_file)
     else:
         logging.info("Running SSEA in serial")
-        ssea_serial(weight_matrix, sample_sets, config, tmp_json_file, 
-                    es_hists_file)
+        ssea_serial(weight_matrix_file, shape, sample_sets, config, 
+                    tmp_json_file, es_hists_file)
     # use ES null distributions to compute global statistics
     # and produce a report
     json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)

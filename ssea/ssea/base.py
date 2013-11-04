@@ -49,6 +49,32 @@ def quantile(a, frac, limit=(), interpolation_method='fraction'):
                              "'lower' or 'higher'")
     return score
 
+def hist_quantile(hist, bins, frac, left=None, right=None):
+    '''
+    '''
+    assert frac >= 0.0
+    assert frac <= 1.0
+    hist_norm = np.zeros(len(bins), dtype=np.float)
+    hist_norm[1:] = (hist.cumsum() / float(hist.sum()))
+    return np.interp(frac, hist_norm, bins, left, right)
+
+def chunk(n, nchunks):
+    '''
+    divide the integer 'n' into 'nchunks' equal sized ranges
+    '''
+    chunk_size, remainder = divmod(n, nchunks)            
+    start = 0
+    while True:
+        end = start + chunk_size
+        if remainder > 0:
+            end += 1
+            remainder -= 1
+        yield (start, end)
+        if end == n:
+            break
+        start = end
+    assert end == n
+
 class ParserError(Exception):
     '''Error parsing a file.'''
     def __init__(self, msg):
@@ -67,9 +93,9 @@ class Config(object):
     MEMMAP_DTYPE = 'float32'
     SAMPLES_JSON_FILE = 'samples.json'
     METADATA_JSON_FILE = 'metadata.json'
-    WEIGHTS_FILE = 'weights.memmap'
     SAMPLE_SETS_JSON_FILE = 'sample_sets.json'
     CONFIG_JSON_FILE = 'config.json'
+    WEIGHT_MATRIX_FILE = 'weight_matrix.memmap'
     RESULTS_JSON_FILE = 'results.json.gz'
     OUTPUT_HISTS_FILE = 'es_hists.npz'
     
@@ -85,6 +111,19 @@ class Config(object):
 
     def to_json(self):
         return json.dumps(self.__dict__)
+    
+    @staticmethod
+    def from_json(s):
+        c = Config()
+        d = json.loads(s)
+        c.__dict__ = d
+        return c
+
+    @staticmethod
+    def parse_json(filename):
+        with open(filename, 'r') as fp:
+            line = fp.next()
+            return Config.from_json(line.strip())
 
     def update_argument_parser(self, parser=None):
         if parser is None:
@@ -195,6 +234,21 @@ class Metadata(object):
         return json.dumps(d)
     
     @staticmethod
+    def from_json(s):
+        d = json.loads(s)
+        m = Metadata()
+        m._id = d.pop('_id')
+        m.name = d.pop('name')
+        m.params = d
+        return m
+    
+    @staticmethod
+    def parse_json(filename):
+        with open(filename, 'r') as fp:
+            for line in fp:
+                yield Metadata.from_json(line.strip())
+    
+    @staticmethod
     def parse_tsv(filename, id_iter=None):
         '''
         parse tab-delimited file containing sample information        
@@ -247,6 +301,22 @@ class SampleSet(object):
              'desc': self.desc,
              'sample_ids': list(self.sample_ids)}
         return json.dumps(d)
+
+    @staticmethod
+    def from_json(s):
+        d = json.loads(s)
+        ss = SampleSet()
+        ss._id = d['_id']
+        ss.name = d['name']
+        ss.desc = d['desc']
+        ss.sample_ids = set(d['sample_ids'])
+        return ss
+
+    @staticmethod
+    def parse_json(filename):
+        with open(filename, 'r') as fp:
+            for line in fp:
+                yield SampleSet.from_json(line.strip())
 
     @staticmethod
     def remove_duplicates(sample_sets):
@@ -418,12 +488,13 @@ class Result(object):
     def __init__(self):
         for x in Result.FIELDS:
             setattr(self, x, None)
+    
     def to_json(self):
         return json.dumps(self.__dict__, cls=NumpyJSONEncoder)
+    
     @staticmethod
     def from_json(s):
         d = json.loads(s)
         res = Result()
-        for f in Result.FIELDS:
-            setattr(res, f, d.get(f, None))
+        res.__dict__ = d
         return res

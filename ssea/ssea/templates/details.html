@@ -1,44 +1,44 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
 <html lang="en">
 <head>
-	<title>Details for enrichment of {{ res.name }} on sample set {{ res.sample_set_name }}</title>
+	<title>Details for enrichment of {{ rowmeta.name }} on sample set {{ sample_set.name }}</title>
 
-	<link rel="stylesheet" href="../web/gridtable.css" type="text/css" media="print, projection, screen" />
+	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
 </head>
 
 <body>
 
 <h1>SSEA Detailed Report</h1>
-<h2>Enrichment of {{ res.name }} on sample set {{ res.sample_set_name }}</h2>
+<h2>Enrichment of {{ rowmeta.name }} on sample set {{ sample_set.name }}</h2>
 <br/>
 <table class="gridtable">
 <thead>
 <tr><th>Parameter</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td>Name</td><td>{{ res.name }}</td></tr>
-<tr><td>Description</td><td>{{ res.desc }}</td></tr>
-<tr><td>Sample set name</td><td>{{ res.sample_set_name }}</td></tr>
-<tr><td>Sample set description</td><td>{{ res.sample_set_desc }}</td></tr>
-<tr><td>Sample set size</td><td>{{ res.sample_set_size }}</td></tr>
-<tr><td>Enrichment Score (ES)</td><td>{{ res.es }}</td></tr>
-<tr><td>Normalized Enrichment Score (ES)</td><td>{{ res.nes }}</td></tr>
-<tr><td>Nominal p-value</td><td>{{ res.nominal_p_value }}</td></tr>
-<tr><td>FDR q-value</td><td>{{ res.fdr_q_value }}</td></tr>
-<tr><td>FWER p-value</td><td>{{ res.fwer_p_value }}</td></tr>
-<tr><td>Rank at maximum running ES</td><td>{{ res.rank_at_max }}</td></tr>
-<tr><td>Leading edge num hits</td><td>{{ res.leading_edge_num_hits }}</td></tr>
-<tr><td>Leading edge frac hits</td><td>{{ res.leading_edge_frac_hits }}</td></tr>
-<tr><td>Sample set frac in leading edge</td><td>{{ res.sample_set_frac_in_leading_edge }}</td></tr>
-<tr><td>Null set frac in leading edge</td><td>{{ res.null_set_frac_in_leading_edge }}</td></tr>
+<tr><td>Name</td><td>{{ rowmeta.name }}</td></tr>
+<tr><td>Sample set name</td><td>{{ sample_set.name }}</td></tr>
+<tr><td>Sample set description</td><td>{{ sample_set.desc }}</td></tr>
+<tr><td>Sample set size</td><td>{{ sample_set.sample_ids|length }}</td></tr>
+<tr><td>Enrichment Score (ES)</td><td>{{ result.es }}</td></tr>
+<tr><td>Normalized Enrichment Score (ES)</td><td>{{ result.nes }}</td></tr>
+<tr><td>Nominal p-value</td><td>{{ result.nominal_p_value }}</td></tr>
+<tr><td>FDR q-value</td><td>{{ result.fdr_q_value }}</td></tr>
+<tr><td>FWER p-value</td><td>{{ result.fwer_p_value }}</td></tr>
+<tr><td>Rank at maximum running ES</td><td>{{ result.rank_at_max }}</td></tr>
+<tr><td>Leading edge hits</td><td>{{ result.core_hits }}</td></tr>
+<tr><td>Leading edge misses</td><td>{{ result.core_misses }}</td></tr>
+<tr><td>Non leading edge hits</td><td>{{ result.null_hits }}</td></tr>
+<tr><td>Non leading edge misses</td><td>{{ result.null_misses }}</td></tr>
 </tbody>
 </table>
 
 <br/><br/>
 
 {% if 'eplot_png' in files %}
-<img name="enplot_{{ res.name }}_vs_{{ res.sample_set_name }}" src="{{ files.eplot_png }}"/>
-Fig 1: Enrichment plot for {{ res.name }}
+<img name="enplot_{{ rowmeta.name }}_vs_{{ sample_set.name }}" src="{{ files.eplot_png }}"/>
+<br/>
+Fig 1: Enrichment plot for {{ sample_set.name }}
 <br/>
 Profile of the running ES score & positions of sample set members in the ordered list
 <br/>
@@ -51,7 +51,7 @@ No enrichment plot available
 {% endif %}
 <br/><br/>
 
-Detailed res
+Detailed results
 <br/>
 <a href="{{ files.tsv }}">Download as text</a>
 <table class="gridtable">
@@ -72,11 +72,11 @@ Detailed res
 <br/><br/><br/>
 
 {% if 'nplot_png' in files %}
-<img name="null_dist_{{ res.name }}_vs_{{ res.sample_set_name }}" src="{{ files.nplot_png }}"/>
+<img name="null_dist_{{ rowmeta.name }}_vs_{{ sample_set.name }}" src="{{ files.nplot_png }}"/>
 <br/>
-Fig 2: Random ES distribution for {{ res.sample_set_name }}
+Fig 2: Random ES distribution for {{ sample_set.name }}
 <br/>
-Gene set null distribution of ES for {{ res.sample_set_name }}
+Gene set null distribution of ES for {{ sample_set.name }}
 {% else %}
 No null distribution plot available
 {% endif %}
