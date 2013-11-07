@@ -1,0 +1,159 @@
+'''
+Created on Nov 6, 2013
+
+@author: mkiyer
+'''
+import os
+import numpy as np
+
+DTYPE = np.float
+
+class CountMatrix(object):
+    def __init__(self):
+        self.nrows = None
+        self.ncols = None
+        self.counts = None
+
+class BigCountMatrix(CountMatrix):
+    MEMMAP_FILE = 'counts.memmap'
+    MEMMAP_T_FILE = 'counts.transpose.memmap'
+    ROWNAMES_FILE = 'rownames.txt'
+    COLNAMES_FILE = 'colnames.txt'
+        
+    def __init__(self):
+        self.rownames = []
+        self.colnames = []
+        self.counts = None
+        self.counts_t = None
+    
+    @staticmethod
+    def open(input_dir):
+        counts_file = os.path.join(input_dir, BigCountMatrix.MEMMAP_FILE)
+        counts_t_file = os.path.join(input_dir, BigCountMatrix.MEMMAP_T_FILE)
+        rownames_file = os.path.join(input_dir, BigCountMatrix.ROWNAMES_FILE)
+        colnames_file = os.path.join(input_dir, BigCountMatrix.COLNAMES_FILE)
+        self = BigCountMatrix()
+        with open(rownames_file, 'r') as fileh:
+            self.rownames = [line.strip() for line in fileh]
+        with open(colnames_file, 'r') as fileh:
+            self.colnames = [line.strip() for line in fileh]
+        self.counts = np.memmap(counts_file, dtype=DTYPE, mode='r', 
+                                shape=(len(self.rownames), len(self.colnames)))
+        self.counts_t = np.memmap(counts_t_file, dtype=DTYPE, mode='r', 
+                                  shape=(len(self.colnames), len(self.rownames)))
+
+    def close(self):
+        del self.counts
+        del self.counts_t
+
+    @staticmethod
+    def from_tsv(input_file, output_dir, na_values=None):
+        '''
+        convert/copy a tab-delimited file containing numeric weight data
+        to a BigCountMatrix (memmap files)    
+        
+        input_file: string path to tab-delimited matrix file
+        output_dir: output directory
+        na_val: set of values corresponding to missing data 
+        '''
+        if na_values is None:
+            na_values = set(['NA'])
+        else:
+            na_values = set(na_values)        
+
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        counts_file = os.path.join(output_dir, BigCountMatrix.MEMMAP_FILE)
+        counts_t_file = os.path.join(output_dir, BigCountMatrix.MEMMAP_T_FILE)
+        rownames_file = os.path.join(output_dir, BigCountMatrix.ROWNAMES_FILE)
+        colnames_file = os.path.join(output_dir, BigCountMatrix.COLNAMES_FILE)        
+        self = BigCountMatrix()
+        # get rownames and colnames        
+        with open(input_file, 'r') as fileh:
+            header_fields = fileh.next().strip().split('\t')
+            self.colnames = list(header_fields[1:])
+            for line in fileh:
+                rowname = line.strip().split('\t',1)[0]
+                self.rownames.append(rowname)
+        
+        # write rownames and colnames
+        with open(rownames_file, 'w') as fileh:
+            for rowname in self.rownames:
+                print >>fileh, rowname
+        with open(colnames_file, 'w') as fileh:
+            for colname in self.colnames:
+                print >>fileh, colname
+
+        # create memmap files
+        self.counts = np.memmap(counts_file, dtype=DTYPE, mode='w+', 
+                                shape=(len(self.rownames), len(self.colnames)))
+        with open(input_file, 'r') as fileh:
+            fileh.next() # skip header
+            for i,line in enumerate(fileh):
+                fields = line.strip().split('\t')
+                # convert to floats and store
+                counts = [(np.nan if x in na_values else float(x))
+                          for x in fields[1:]]
+                self.counts[i,:] = counts
+        # write transpose
+        self.counts_t = np.memmap(counts_t_file, dtype=DTYPE, mode='w+', 
+                                  shape=(len(self.colnames), len(self.rownames)))
+        self.counts_t[:] = self.counts.T[:]
+        return self
+
+    def _estimate_size_factors_deseq(self):
+        '''
+        Implements the procedure as described in DESeq:
+        
+        Each column is divided by the geometric means of the rows.
+        the median of these ratios (skipping genes with zero values)
+        is used as the size factor for each column.
+        '''
+        # compute row geometric means
+        geomeans = np.empty(self.nrows, dtype=np.float)
+        for i in xrange(self.nrows):
+            a = np.around(self.counts[i,:])
+            valid = np.logical_and((a > 0), np.isfinite(a))
+            if np.all(valid):
+                geomeans[i] = np.exp(np.log(a[valid]).mean())
+            else:
+                geomeans[i] = np.nan
+            #if i % 10000 == 0:
+            #    logging.debug("%d %d" % (i, np.isfinite(geomeans[:i]).sum()))
+        #print 'found', np.isfinite(geomeans).sum()
+        # ignore rows of zero or nan
+        valid_geomeans = np.logical_and((geomeans > 0), np.isfinite(geomeans))
+        size_factors = np.empty(self.ncols, dtype=np.float)
+        for j in xrange(self.ncols):
+            a = np.around(self.counts_t[j,:])
+            lib_valid = np.logical_and((a > 0), np.isfinite(a))
+            valid = np.logical_and(lib_valid, valid_geomeans)
+            if np.any(valid):
+                size_factors[j] = np.median(a[valid] / geomeans[valid])
+            else:
+                size_factors[j] = np.nan
+            #print j, self.library_ids[j], size_factors[j], valid.sum(), a[valid].sum()
+        return size_factors
+
+    def estimate_size_factors(self, method='deseq'):
+        '''
+        estimate size factors (normalization factors) for libraries
+        '''
+        if method == 'deseq':
+            size_factors = self._estimate_size_factors_deseq()
+        elif method == 'median':
+            size_factors = np.empty(self.ncols, dtype=np.float)
+            for j in xrange(self.ncols):
+                a = self.counts_t[j,:]
+                valid = np.logical_and((a > 0),np.isfinite(a))
+                size_factors[j] = np.median(a[valid])
+            size_factors = size_factors / np.median(size_factors)
+        elif method == 'total':
+            size_factors = np.empty(self.ncols, dtype=np.float)
+            for j in xrange(self.ncols):
+                a = self.counts_t[j,:]
+                a = a[np.isfinite(a)]
+                size_factors[j] = a.sum()
+            size_factors = size_factors / np.median(size_factors)
+        return size_factors
+

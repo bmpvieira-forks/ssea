@@ -40,6 +40,7 @@ env = Environment(loader=PackageLoader("ssea", "templates"),
 # matplotlib static figure for plotting
 global_fig = plt.figure(0)
 
+# functions to test operator
 OP_TEST_FUNCS = {'<=': lambda a,b: a<=b,
                  '>=': lambda a,b: a>=b,
                  '<': lambda a,b: a<b,
@@ -141,9 +142,9 @@ class SSEAData:
                  'running_es', 'core_enrichment']]
         for i,ind in enumerate(self.hit_indexes):
             if self.es < 0:
-                is_enriched = int(ind <= self.rank_at_max)
-            else:                
                 is_enriched = int(ind >= self.rank_at_max)
+            else:                
+                is_enriched = int(ind <= self.rank_at_max)
             meta = sample_metadata[self.sample_ids[ind]]
             rows.append([i, meta.name, ind+1, self.raw_weights[ind], 
                          self.tx_weights_hit[ind], self.running_es[ind],
@@ -355,7 +356,6 @@ def create_detailed_report(result, sample_ids, weights, rowmeta, colmeta,
 
 def create_html_report(input_file, output_file, row_metadata, sample_sets, 
                        runconfig):
-    logging.debug("Writing HTML report")
     def _result_parser(filename):
         with open(filename, 'r') as fp:
             for line in fp:
@@ -616,8 +616,8 @@ USAGE
     # initialize configuration
     config.parse_args(parser, args)
     config.log()
-    #return report_parallel(config)
-    return report(config)
+    return report_parallel(config)
+    #return report(config)
 
 if __name__ == "__main__":
     sys.exit(main())

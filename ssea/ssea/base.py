@@ -106,6 +106,13 @@ class Config(object):
         self.perms = 1000
         self.weight_miss = 'log'
         self.weight_hit = 'log'
+        self.weight_params = 1.0
+
+        self.count_model = 'poisson'
+        
+        self.noise_model = 'gaussian'
+        self.noise_mean = 1.0
+        
         self.weight_const = 1.1
         self.weight_noise = 0.1
 

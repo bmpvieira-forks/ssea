@@ -33,6 +33,7 @@ $(document).ready(function() {
 <th>Index</th>
 <th>Details</th>
 <th>Name</th>
+<th>Description</th>
 <th>Sample Set</th>
 <th>Sample Set Description</th>
 <th>Sample Set Size</th>
@@ -60,6 +61,7 @@ $(document).ready(function() {
   <a href="{{ res.files['html'] }}">Link</a>
 {% endif %}
 </td>
+<td>{{ res.name }}</td>
 <td>{{ res.name }}</td>
 <td>{{ res.sample_set_name }}</td>
 <td>{{ res.sample_set_desc }}</td>

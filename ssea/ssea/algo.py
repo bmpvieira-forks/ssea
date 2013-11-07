@@ -248,11 +248,11 @@ def ssea_serial(weight_matrix_file, shape, sample_sets, config,
             print >>outfileh, res.to_json()
             # update ES histograms
             if res.es <= 0:
-                es_hists['null_neg'][i] += np.histogram(es_null, BINS_NEG)[0]
-                es_hists['obs_neg'][i] += np.histogram(res.es, BINS_NEG)[0]
+                es_hists['null_neg'][res.ss_id] += np.histogram(es_null, BINS_NEG)[0]
+                es_hists['obs_neg'][res.ss_id] += np.histogram(res.es, BINS_NEG)[0]
             if res.es >= 0:
-                es_hists['null_pos'][i] += np.histogram(es_null, BINS_POS)[0]        
-                es_hists['obs_pos'][i] += np.histogram(res.es, BINS_POS)[0]
+                es_hists['null_pos'][res.ss_id] += np.histogram(es_null, BINS_POS)[0]        
+                es_hists['obs_pos'][res.ss_id] += np.histogram(res.es, BINS_POS)[0]
     # close report file
     outfileh.close()
     # save histograms to a file
@@ -330,9 +330,9 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
     hists_obs_neg_counts = hists_obs_neg.sum(axis=1)
     # compute means
     hists_null_neg_means = np.fabs((hists_null_neg * BIN_CENTERS_NEG).sum(axis=1) / 
-                                   hists_null_neg_counts)
+                                   hists_null_neg_counts.clip(1.0))
     hists_null_pos_means = np.fabs((hists_null_pos * BIN_CENTERS_POS).sum(axis=1) / 
-                                   hists_null_pos_counts)
+                                   hists_null_pos_counts.clip(1.0))
     # parse report json and write new values
     fin = gzip.open(input_json_file, 'rb')
     fout = gzip.open(output_json_file, 'wb')
@@ -344,12 +344,18 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
         es = res.es
         # compute global nes and fdr        
         if es < 0:
-            global_nes = es / hists_null_neg_means[i]            
+            if hists_null_neg_means[i] == 0:
+                global_nes = 0.0
+            else:
+                global_nes = es / hists_null_neg_means[i]            
             es_bin = np.digitize((es,), BINS_NEG)
             n = (1+hists_null_neg[i,:es_bin].sum()) / (1+float(hists_null_neg_counts[i]))
             d = hists_obs_neg[i,:es_bin].sum() / float(hists_obs_neg_counts[i])
         else:
-            global_nes = es / hists_null_pos_means[i]            
+            if hists_null_pos_means[i] == 0:
+                global_nes = 0.0
+            else:
+                global_nes = es / hists_null_pos_means[i]            
             es_bin = np.digitize((es,), BINS_POS) - 1
             n = (1+hists_null_pos[i,es_bin:].sum()) / (1+float(hists_null_pos_counts[i]))
             d = hists_obs_pos[i,es_bin:].sum() / float(hists_obs_pos_counts[i])

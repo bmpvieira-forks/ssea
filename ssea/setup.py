@@ -11,7 +11,14 @@ from Cython.Build import cythonize
 import numpy
 numpy_inc = numpy.get_include()
 
-ext_modules = [Extension('ssea.kernel', ["ssea/kernel.pyx"], include_dirs=[numpy_inc])] 
+ext_modules = [Extension('ssea.kernel', 
+                         sources=["ssea/kernel.pyx"], 
+                         include_dirs=[numpy_inc]),
+               Extension('ssea.crng', 
+                         sources=['ssea/crng.pyx', 'ssea/rng.c'],
+                         include_dirs=[numpy_inc],
+                         libraries=['m'])
+               ]
 
 setup(name='SSEA',
       ext_modules=cythonize(ext_modules),
