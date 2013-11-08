@@ -38,17 +38,20 @@ $(document).ready(function() {
 <th>Sample Set Description</th>
 <th>Sample Set Size</th>
 <th>ES</th>
-<th>NES</th>
 <th>NOM p-val</th>
-<th>FDR q-val</th>
-<th>FWER p-val</th>
+<th>T NES</th>
+<th>T FDR q-val</th>
+<th>SS NES</th>
+<th>SS FDR q-val</th>
 <th>GLOBAL NES</th>
 <th>GLOBAL FDR q-val</th>
-<th>Rank at maximum running ES</th>
+<th>ES Rank</th>
 <th>Core hits</th>
 <th>Core misses</th>
 <th>Null hits</th>
 <th>Null misses</th>
+<th>Fisher's p-value</th>
+<th>Odds ratio</th>
 </tr>
 </thead>
 
@@ -67,17 +70,20 @@ $(document).ready(function() {
 <td>{{ res.sample_set_desc }}</td>
 <td>{{ res.sample_set_size }}</td>
 <td>{{ res.es }}</td>
-<td>{{ res.nes }}</td>
 <td>{{ res.nominal_p_value }}</td>
-<td>{{ res.fdr_q_value }}</td>
-<td>{{ res.fwer_p_value }}</td>
+<td>{{ res.t_nes }}</td>
+<td>{{ res.t_fdr_q_value }}</td>
+<td>{{ res.ss_nes }}</td>
+<td>{{ res.ss_fdr_q_value }}</td>
 <td>{{ res.global_nes }}</td>
 <td>{{ res.global_fdr_q_value }}</td>
-<td>{{ res.rank_at_max }}</td>
+<td>{{ res.es_rank }}</td>
 <td>{{ res.core_hits }}</td>
 <td>{{ res.core_misses }}</td>
 <td>{{ res.null_hits }}</td>
 <td>{{ res.null_misses }}</td>
+<td>{{ res.fisher_p_value }}</td>
+<td>{{ res.odds_ratio }}</td>
 </tr>
 {% endfor %}
 </tbody>

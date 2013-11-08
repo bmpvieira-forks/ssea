@@ -25,9 +25,9 @@ from jinja2 import Environment, PackageLoader
 
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile
-from ssea.algo import transform_weights
-from ssea.kernel import ssea_kernel
+from ssea.kernel import ssea_kernel2, RandomState, power_transform
+from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile
+from countdata import BigCountMatrix
 
 # setup path to web files
 import ssea
@@ -111,17 +111,18 @@ class ReportConfig(object):
         self.num_processes = args.num_processes
         # parse threshold arguments of the form 'attribute,value'
         # for example: nominal_p_value,0.05
-        for arg in args.thresholds:
-            m = re.match(r'(.+)([<>]=?)(.+)', arg)
-            if m is None:
-                parser.error('error parsing threshold argument "%s"' % (arg))
-            attr, op, value = m.groups()
-            if attr not in Result.FIELDS:
-                parser.error('threshold attribute "%s" unknown' % (attr))
-            if op not in OP_TEST_FUNCS:
-                parser.error('unrecognized operator "%s"' % (op))
-            value = float(value)
-            self.thresholds.append((attr,op,value))       
+        if args.thresholds is not None:
+            for arg in args.thresholds:
+                m = re.match(r'(.+)([<>]=?)(.+)', arg)
+                if m is None:
+                    parser.error('error parsing threshold argument "%s"' % (arg))
+                attr, op, value = m.groups()
+                if attr not in Result.FIELDS:
+                    parser.error('threshold attribute "%s" unknown' % (attr))
+                if op not in OP_TEST_FUNCS:
+                    parser.error('unrecognized operator "%s"' % (op))
+                value = float(value)
+                self.thresholds.append((attr,op,value))       
         # check input directory
         if not os.path.exists(args.input_dir):
             parser.error("input directory '%s' not found" % (args.input_dir))
@@ -138,63 +139,64 @@ class ReportConfig(object):
 class SSEAData:
     def get_details_table(self, sample_metadata):
         # show details of hits
-        rows = [['index', 'sample', 'rank', 'raw_weight', 'transformed_weight', 
+        rows = [['index', 'sample', 'rank', 'raw_weights', 'transformed_weights',
                  'running_es', 'core_enrichment']]
         for i,ind in enumerate(self.hit_indexes):
             if self.es < 0:
-                is_enriched = int(ind >= self.rank_at_max)
+                is_enriched = int(ind >= self.es_rank)
             else:                
-                is_enriched = int(ind <= self.rank_at_max)
+                is_enriched = int(ind <= self.es_rank)
             meta = sample_metadata[self.sample_ids[ind]]
-            rows.append([i, meta.name, ind+1, self.raw_weights[ind], 
-                         self.tx_weights_hit[ind], self.running_es[ind],
+            rows.append([i, meta.name, ind+1, self.raw_weights[ind],
+                         self.weights_hit[ind], self.es_run[ind], 
                          is_enriched])
         return rows
 
-def ssea_rerun(sample_ids, weights, sample_set,
-               weight_method_miss='unweighted',
-               weight_method_hit='unweighted',
-               weight_const=0.0): 
+def ssea_rerun(sample_ids, counts, size_factors, sample_set, seed, config):
     '''    
     sample_ids: list of unique integer ids
-    weights: list of float values
-    sample_sets: list of SampleSet objects
+    counts: list of floats
+    size_factors: list of floats
+    sample_set: SampleSet object
     '''
-    # copy weights
-    raw_weights = np.array(weights, dtype=np.float)
-    # rank order the N samples in D to form L={s1...sn} 
-    ranks = np.argsort(weights)[::-1]
-    sample_ids = [sample_ids[i] for i in ranks]
-    raw_weights = raw_weights[ranks]
-    tx_weights = raw_weights + weight_const
-    tx_weights_miss = np.fabs(transform_weights(tx_weights, weight_method_miss)) 
-    tx_weights_hit = np.fabs(transform_weights(tx_weights, weight_method_hit))    
-    # convert sample sets to membership vectors
-    membership = np.zeros((len(sample_ids), 1), dtype=BOOL_DTYPE)
+    # convert sample set to membership vector
+    membership = np.empty((len(sample_ids),1), dtype=BOOL_DTYPE)
     membership[:,0] = sample_set.get_array(sample_ids)
-    # determine enrichment score (ES)
-    perm = np.arange(len(sample_ids))
-    es_vals, es_run_inds, es_runs = \
-        ssea_kernel(tx_weights, tx_weights_miss, tx_weights_hit, 
-                    membership, perm)
-    m = membership[:,0]
-    hit_indexes = (m > 0).nonzero()[0]
+    # reproduce previous run
+    rng = RandomState(seed)
+    norm_counts, ranks, es_vals, es_ranks, es_runs = \
+        ssea_kernel2(counts, size_factors, membership, rng,
+                     resample_counts=False,
+                     permute_samples=False,
+                     add_noise=True,
+                     noise_loc=config.noise_loc, 
+                     noise_scale=config.noise_scale,
+                     method_miss=config.weight_miss,
+                     method_hit=config.weight_hit,
+                     method_param=config.weight_param)
+    # perform power transform and adjust by constant
+    norm_counts_miss = power_transform(norm_counts, config.weight_miss, 
+                                       config.weight_param)
+    norm_counts_hit = power_transform(norm_counts, config.weight_hit, 
+                                      config.weight_param)    
     # make object for plotting
+    m = membership[ranks,0]
+    hit_indexes = (m > 0).nonzero()[0]
     d = SSEAData()
     d.es = es_vals[0]
-    d.running_es = es_runs[:,0]
-    d.rank_at_max = es_run_inds[0]
+    d.es_run = es_runs[:,0]
+    d.es_rank = es_ranks[0]
     d.hit_indexes = hit_indexes
     d.ranks = ranks
-    d.sample_ids = sample_ids
-    d.raw_weights = raw_weights
-    d.tx_weights_miss = tx_weights_miss
-    d.tx_weights_hit = tx_weights_hit
+    d.sample_ids = sample_ids[ranks]
+    d.raw_weights = norm_counts[ranks]
+    d.weights_miss = norm_counts_miss[ranks]
+    d.weights_hit = norm_counts_hit[ranks]
     return d
 
-def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss,
-                    weights_hit, es, es_null_mean, es_null_bins, 
-                    es_null_hist, title, plot_conf_int=True, conf_int=0.95, 
+def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss, 
+                    weights_hit, es, null_es_mean, es_null_bins, 
+                    null_es_val_hist, title, plot_conf_int=True, conf_int=0.95, 
                     fig=None):
     if fig is None:
         fig = plt.Figure()
@@ -216,14 +218,14 @@ def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss,
         else:
             inds = (es_null_bins >= 0).nonzero()[0]
             left, right = 0.0, 1.0
-        es_null_hist = np.array(es_null_hist, dtype=np.float)
+        null_es_val_hist = np.array(null_es_val_hist, dtype=np.float)
         bins = es_null_bins[inds]
-        hist = es_null_hist[inds[:-1]]
+        hist = null_es_val_hist[inds[:-1]]
         ci_lower = hist_quantile(hist, bins, 1.0-conf_int, left, right)                
         ci_upper = hist_quantile(hist, bins, conf_int, left, right)
         lower_bound = np.repeat(ci_lower, len(x))
         upper_bound = np.repeat(ci_upper, len(x))
-        ax0.axhline(y=es_null_mean, lw=2, color='red', ls=':')
+        ax0.axhline(y=null_es_mean, lw=2, color='red', ls=':')
         ax0.fill_between(x, lower_bound, upper_bound,
                          lw=0, facecolor='yellow', alpha=0.5,
                          label='%.2f CI' % (100. * conf_int))
@@ -255,6 +257,7 @@ def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss,
     ax2 = fig.add_subplot(gs[2])
     ax2.plot(weights_miss, color='blue')
     ax2.plot(weights_hit, color='red')
+    #ax2.plot(weights_hit, color='red')
     ax2.set_xlim((0, len(running_es)))
     ax2.set_xlabel('Samples')
     ax2.set_ylabel('Weights')
@@ -262,7 +265,7 @@ def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss,
     fig.tight_layout()
     return fig
 
-def plot_null_distribution(es, es_null_bins, es_null_hist, percent_neg, 
+def plot_null_distribution(es, es_null_bins, null_es_val_hist, 
                            fig=None):
     if fig is None:
         fig = plt.Figure()
@@ -270,7 +273,7 @@ def plot_null_distribution(es, es_null_bins, es_null_hist, percent_neg,
         fig.clf()
     # get coords of bars    
     left = es_null_bins[:-1]
-    height = es_null_hist
+    height = null_es_val_hist
     width = [(r-l) for l,r in zip(es_null_bins[:-1],es_null_bins[1:])]
     # make plot
     ax = fig.add_subplot(1,1,1)
@@ -278,12 +281,16 @@ def plot_null_distribution(es, es_null_bins, es_null_hist, percent_neg,
     ax.axvline(x=es, linestyle='--', color='black')
     ax.set_title('Random ES distribution')
     ax.set_ylabel('P(ES)')
+    # calculate percent neg
+    percent_neg = sum(null_es_val_hist[i] for i in xrange(len(null_es_val_hist))
+                      if es_null_bins[i] < 0)
+    percent_neg /= float(sum(null_es_val_hist))
     ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % 
                   (percent_neg))
     return fig
 
-def create_detailed_report(result, sample_ids, weights, rowmeta, colmeta, 
-                           sample_set, runconfig, reportconfig):
+def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set, 
+                           reportconfig):
     '''
     Generate detailed report files including enrichment plots and 
     a tab-delimited text file showing the running ES score and rank
@@ -291,23 +298,18 @@ def create_detailed_report(result, sample_ids, weights, rowmeta, colmeta,
      
     returns dict containing files written
     '''    
-    # regenerate SSEA result
-    sseadata = ssea_rerun(sample_ids, weights, sample_set,
-                          weight_method_miss=runconfig.weight_miss,
-                          weight_method_hit=runconfig.weight_hit,
-                          weight_const=runconfig.weight_const)
     d = {}
     if reportconfig.create_plots:        
         # enrichment plot
-        fig = plot_enrichment(sseadata.running_es, 
-                              sseadata.rank_at_max, 
+        fig = plot_enrichment(sseadata.es_run, 
+                              sseadata.es_rank,
                               sseadata.hit_indexes, 
-                              sseadata.tx_weights_miss,
-                              sseadata.tx_weights_hit, 
+                              sseadata.weights_miss,
+                              sseadata.weights_hit,
                               sseadata.es,  
-                              result.es_null_mean, 
+                              result.null_es_mean, 
                               Config.ES_NULL_BINS,
-                              result.es_null_hist,
+                              result.null_es_val_hist,
                               title=sample_set.name, 
                               plot_conf_int=reportconfig.plot_conf_int, 
                               conf_int=reportconfig.conf_int,
@@ -319,8 +321,7 @@ def create_detailed_report(result, sample_ids, weights, rowmeta, colmeta,
         # null distribution plot
         plot_null_distribution(result.es, 
                                Config.ES_NULL_BINS,
-                               result.es_null_hist, 
-                               result.es_null_percent_neg, 
+                               result.null_es_val_hist, 
                                fig=global_fig)
         nplot_png = '%s.%s.null.png' % (rowmeta.name, sample_set.name)
         nplot_pdf = '%s.%s.null.pdf' % (rowmeta.name, sample_set.name)
@@ -370,7 +371,7 @@ def create_html_report(input_file, output_file, row_metadata, sample_sets,
     t = env.get_template('report.html')
     with open(output_file, 'w') as fp:
         print >>fp, t.render(name=runconfig.name,
-                         results=_result_parser(input_file))
+                             results=_result_parser(input_file))
 
 def parse_and_filter_results(filename, thresholds):
     with gzip.open(filename, 'rb') as fin:
@@ -517,8 +518,7 @@ def report(config):
                                           Config.SAMPLES_JSON_FILE)
     sample_sets_json_file = os.path.join(config.input_dir,
                                          Config.SAMPLE_SETS_JSON_FILE)
-    weight_matrix_file = os.path.join(config.input_dir, 
-                                      Config.WEIGHT_MATRIX_FILE)
+    matrix_dir = os.path.join(config.input_dir, Config.MATRIX_DIR)
     config_json_file = os.path.join(config.input_dir, 
                                     Config.CONFIG_JSON_FILE)
     # load input files
@@ -526,12 +526,8 @@ def report(config):
     col_metadata = list(Metadata.parse_json(col_metadata_json_file))
     sample_sets = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
     runconfig = Config.parse_json(config_json_file)
-    # open weight matrix memmap file
-    shape = (len(row_metadata),len(col_metadata))
-    weight_matrix = np.memmap(weight_matrix_file, 
-                              dtype=Config.MEMMAP_DTYPE, 
-                              mode='r', 
-                              shape=shape)
+    # open data matrix
+    bm = BigCountMatrix.open(matrix_dir)
     # write filtered results to output file
     filtered_results_file = os.path.join(config.output_dir, 
                                          'filtered_results.json')
@@ -540,19 +536,20 @@ def report(config):
     logging.info("Processing results")
     json_file = os.path.join(config.input_dir, Config.RESULTS_JSON_FILE)
     for result in parse_and_filter_results(json_file, config.thresholds):
-        # get weights
-        weights = np.array(weight_matrix[result.t_id,:], dtype=np.float)
+        # read from memmap
+        counts = np.array(bm.counts[result.t_id,:], dtype=np.float)
         # remove 'nan' values        
-        sample_ids = np.isfinite(weights).nonzero()[0]
-        weights = weights[sample_ids]
+        sample_ids = np.isfinite(counts).nonzero()[0]
+        counts = counts[sample_ids]
+        size_factors = bm.size_factors[sample_ids]
         # get sample set
         sample_set = sample_sets[result.ss_id]
-        d = create_detailed_report(result, sample_ids, weights,
-                                   row_metadata[result.t_id], 
-                                   col_metadata,
-                                   sample_set,
-                                   runconfig,
-                                   config)
+        # rerun ssea
+        sseadata = ssea_rerun(sample_ids, counts, size_factors, sample_set, 
+                              result.rand_seed, runconfig)
+        d = create_detailed_report(result, sseadata, 
+                                   row_metadata[result.t_id], col_metadata, 
+                                   sample_set, config)
         # update results with location of plot files
         result.files = d
         # write result to tab-delimited text
@@ -616,8 +613,8 @@ USAGE
     # initialize configuration
     config.parse_args(parser, args)
     config.log()
-    return report_parallel(config)
-    #return report(config)
+    #return report_parallel(config)
+    return report(config)
 
 if __name__ == "__main__":
     sys.exit(main())

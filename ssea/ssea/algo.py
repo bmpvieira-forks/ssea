@@ -41,7 +41,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
     rng: RandomState object
     config: Config object
     '''
-    # first run without resampling count data
+    # first run without resampling count data and save seed
+    rand_seed = rng.seed
     k = ssea_kernel2(counts, size_factors, membership, rng,
                      resample_counts=False,
                      permute_samples=False,
@@ -51,7 +52,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
                      method_miss=config.weight_miss,
                      method_hit=config.weight_hit,
                      method_param=config.weight_param)
-    k = KernelResult._make(k)    
+    k = KernelResult._make(k)
+    ranks = k.ranks
     es_vals = k.es_vals
     es_ranks = k.es_ranks
     # next run to generate a range of observed enrichment scores
@@ -170,7 +172,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     # setup result objects
     for j in xrange(membership.shape[1]):
         # get indexes of hits in this set
-        m = membership[:,j]
+        m = membership[ranks,j]
         hit_inds = (m > 0).nonzero()[0]       
         num_hits = hit_inds.shape[0]
         num_misses = m.shape[0] - num_hits
@@ -211,6 +213,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
                                       for q in Config.ES_QUANTILES]
         # create dictionary result
         res = Result()
+        res.rand_seed = rand_seed
         res.es = es_vals[j]
         res.es_rank = int(es_ranks[j])
         res.nominal_p_value = pvals[j]

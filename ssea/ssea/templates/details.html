@@ -21,15 +21,20 @@
 <tr><td>Sample set description</td><td>{{ sample_set.desc }}</td></tr>
 <tr><td>Sample set size</td><td>{{ sample_set.sample_ids|length }}</td></tr>
 <tr><td>Enrichment Score (ES)</td><td>{{ result.es }}</td></tr>
-<tr><td>Normalized Enrichment Score (ES)</td><td>{{ result.nes }}</td></tr>
 <tr><td>Nominal p-value</td><td>{{ result.nominal_p_value }}</td></tr>
-<tr><td>FDR q-value</td><td>{{ result.fdr_q_value }}</td></tr>
-<tr><td>FWER p-value</td><td>{{ result.fwer_p_value }}</td></tr>
-<tr><td>Rank at maximum running ES</td><td>{{ result.rank_at_max }}</td></tr>
+<tr><td>Transcript NES</td><td>{{ result.t_nes }}</td></tr>
+<tr><td>Transcript FDR q-value</td><td>{{ result.t_fdr_q_value }}</td></tr>
+<tr><td>Sample Set NES</td><td>{{ result.ss_nes }}</td></tr>
+<tr><td>Sample Set FDR q-value</td><td>{{ result.ss_fdr_q_value }}</td></tr>
+<tr><td>Global NES</td><td>{{ result.global_nes }}</td></tr>
+<tr><td>Global FDR q-value</td><td>{{ result.global_fdr_q_value }}</td></tr>
+<tr><td>Rank at maximum running ES</td><td>{{ result.es_rank }}</td></tr>
 <tr><td>Leading edge hits</td><td>{{ result.core_hits }}</td></tr>
 <tr><td>Leading edge misses</td><td>{{ result.core_misses }}</td></tr>
 <tr><td>Non leading edge hits</td><td>{{ result.null_hits }}</td></tr>
 <tr><td>Non leading edge misses</td><td>{{ result.null_misses }}</td></tr>
+<tr><td>Fisher's p-value</td><td>{{ result.fisher_p_value }}</td></tr>
+<tr><td>OR</td><td>{{ result.odds_ratio }}</td></tr>
 </tbody>
 </table>
 
