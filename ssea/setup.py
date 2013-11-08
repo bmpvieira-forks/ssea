@@ -12,15 +12,19 @@ import numpy
 numpy_inc = numpy.get_include()
 
 ext_modules = [Extension('ssea.kernel', 
-                         sources=["ssea/kernel.pyx"], 
-                         include_dirs=[numpy_inc]),
-               Extension('ssea.crng', 
-                         sources=['ssea/crng.pyx', 'ssea/rng.c'],
+                         sources=['ssea/kernel.pyx', 'ssea/rng.c'], 
                          include_dirs=[numpy_inc],
-                         libraries=['m'])
-               ]
+                         libraries=['m']),
+               Extension('ssea.cfisher', 
+                         sources=['ssea/cfisher.pyx'], 
+                         include_dirs=[numpy_inc])]
 
 setup(name='SSEA',
+      description='Sample Set Enrichment Analysis',
+      url='http://ssea.googlecode.com',
+      author='matthew iyer, yashar niknafs',
+      author_email='matthew.iyer@gmail.com',
+      requires=['numpy', 'jinja2'],
       ext_modules=cythonize(ext_modules),
       packages={'ssea'},
       package_data={'ssea.templates': ['detailedreport.html',

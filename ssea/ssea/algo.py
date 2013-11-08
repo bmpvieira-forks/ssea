@@ -7,12 +7,20 @@ import os
 import logging
 import shutil
 import gzip
+from collections import namedtuple
 from multiprocessing import Process
 import numpy as np
 
 # local imports
-from kernel import ssea_kernel
-from base import BOOL_DTYPE, Config, Result, Metadata, chunk
+import ssea.cfisher as fisher
+from ssea.kernel import ssea_kernel2, RandomState
+from base import BOOL_DTYPE, Config, Result, chunk, quantile
+from countdata import BigCountMatrix
+
+# improves readability of code
+KernelResult = namedtuple('KernelResult', ('norm_counts', 'ranks', 
+                                           'es_vals', 'es_ranks', 
+                                           'es_runs'))
 
 # enrichment score histogram bins
 NUM_BINS = 10000
@@ -25,61 +33,61 @@ BIN_CENTERS_POS = (BINS_POS[:-1] + BINS_POS[1:]) / 2.
 TMP_DIR = 'tmp'
 TMP_JSON_FILE = 'tmp.json.gz'
 
-def transform_weights(weights, method):
-    if method == 'unweighted':
-        return np.ones(len(weights), dtype=np.float)
-    elif method == 'weighted':
-        return weights
-    elif method == 'log':
-        signs = np.array([-1.0 if w < 0 else 1.0 for w in weights])
-        absarr = np.fabs(weights)
-        assert np.all(absarr >= 1.0)
-        return signs * np.log2(absarr)
-    else:
-        assert False
-
-def ssea_run(sample_ids, weights, sample_sets, 
-             weight_method_miss='unweighted', 
-             weight_method_hit='unweighted',
-             weight_const=0.0, 
-             weight_noise=0.0,
-             perms=10000):
+def ssea_run(counts, size_factors, membership, rng, config):
     '''
-    
-    sample_ids: list of unique integer ids
-    weights: list of float values
-    sample_sets: list of SampleSet objects
+    counts: numpy array of float values
+    size_factors: normalization factors for counts
+    membership: boolean 2d array (samples, sets) with set membership
+    rng: RandomState object
+    config: Config object
     '''
-    weights = np.array(weights, dtype=np.float)
-    # noise does not preserve rank so need to add first
-    tweights = weights.copy()
-    if weight_noise > 0.0:
-        tweights += weight_noise * np.random.random(len(weights))
-    # rank order the N samples in D to form L={s1...sn} 
-    ranks = np.argsort(tweights)[::-1]
-    sample_ids = [sample_ids[i] for i in ranks]
-    weights = weights[ranks]
-    tweights = tweights[ranks]
-    # perform power transform and adjust by constant
-    tweights += weight_const
-    tweights_miss = np.fabs(transform_weights(tweights, weight_method_miss)) 
-    tweights_hit = np.fabs(transform_weights(tweights, weight_method_hit))    
-    # convert sample sets to membership vectors
-    membership = np.zeros((len(sample_ids),len(sample_sets)), 
-                          dtype=BOOL_DTYPE)
-    for j,sample_set in enumerate(sample_sets):
-        membership[:,j] = sample_set.get_array(sample_ids)
-    # determine enrichment score (ES)
-    perm = np.arange(len(sample_ids))
-    es_vals, es_run_inds, es_runs = \
-        ssea_kernel(tweights, tweights_miss, tweights_hit, 
-                    membership, perm)
+    # first run without resampling count data
+    k = ssea_kernel2(counts, size_factors, membership, rng,
+                     resample_counts=False,
+                     permute_samples=False,
+                     add_noise=True,
+                     noise_loc=config.noise_loc, 
+                     noise_scale=config.noise_scale,
+                     method_miss=config.weight_miss,
+                     method_hit=config.weight_hit,
+                     method_param=config.weight_param)
+    k = KernelResult._make(k)    
+    es_vals = k.es_vals
+    es_ranks = k.es_ranks
+    # next run to generate a range of observed enrichment scores
+    shape = (config.resampling_iterations, membership.shape[1])    
+    resample_es_vals = np.zeros(shape, dtype=np.float) 
+    resample_es_ranks = np.zeros(shape, dtype=np.int)
+    for i in xrange(config.resampling_iterations):
+        k = ssea_kernel2(counts, size_factors, membership, rng,
+                         resample_counts=True,
+                         permute_samples=False,
+                         add_noise=True,
+                         noise_loc=config.noise_loc, 
+                         noise_scale=config.noise_scale,
+                         method_miss=config.weight_miss,
+                         method_hit=config.weight_hit,
+                         method_param=config.weight_param)
+        k = KernelResult._make(k)
+        resample_es_vals[i,:] = k.es_vals
+        resample_es_ranks[i,:] = k.es_ranks
     # permute samples and determine ES null distribution
-    es_null = np.zeros((perms, len(sample_sets)), dtype=np.float)
-    for i in xrange(perms):
-        np.random.shuffle(perm)
-        es_null[i] = ssea_kernel(tweights, tweights_miss, 
-                                 tweights_hit, membership, perm)[0]
+    shape = (config.perms, membership.shape[1])
+    null_es_vals = np.zeros(shape, dtype=np.float) 
+    null_es_ranks = np.zeros(shape, dtype=np.float)
+    for i in xrange(config.perms):
+        k = ssea_kernel2(counts, size_factors, membership, rng,
+                         resample_counts=True,
+                         permute_samples=True,
+                         add_noise=True,
+                         noise_loc=config.noise_loc, 
+                         noise_scale=config.noise_scale,
+                         method_miss=config.weight_miss,
+                         method_hit=config.weight_hit,
+                         method_param=config.weight_param)
+        k = KernelResult._make(k)
+        null_es_vals[i,:] = k.es_vals
+        null_es_ranks[i,:] = k.es_ranks
     # default containers for results
     nes_vals = np.empty(membership.shape[1], dtype=np.float)
     pvals = np.empty(membership.shape[1], dtype=np.float)
@@ -91,7 +99,7 @@ def ssea_run(sample_ids, weights, sample_sets,
     es_neg_inds = (es_vals < 0).nonzero()[0]
     if len(es_neg_inds) > 0:
         # mask positive scores 
-        es_null_neg = np.ma.masked_greater(es_null[:,es_neg_inds], 0)
+        es_null_neg = np.ma.masked_greater(null_es_vals[:,es_neg_inds], 0)
         # Adjust for variation in gene set size. Normalize ES(S,null)
         # and the observed ES(S), separately rescaling the positive and
         # negative scores by dividing by the mean of the ES(S,null) to
@@ -121,7 +129,7 @@ def ssea_run(sample_ids, weights, sample_sets,
     es_pos_inds = (es_vals >= 0).nonzero()[0]
     if len(es_pos_inds) > 0:
         # mask negative scores 
-        es_null_pos = np.ma.masked_less(es_null[:,es_pos_inds], 0)
+        es_null_pos = np.ma.masked_less(null_es_vals[:,es_pos_inds], 0)
         # normalize
         es_null_pos_means = es_null_pos.mean(axis=0)
         es_null_means[es_pos_inds] = es_null_pos_means        
@@ -168,36 +176,62 @@ def ssea_run(sample_ids, weights, sample_sets,
         num_misses = m.shape[0] - num_hits
         # calculate leading edge stats
         if es_vals[j] < 0:
-            core_hits = sum(i >= es_run_inds[j] for i in hit_inds)
-            core_misses = (membership.shape[0] - es_run_inds[j]) - core_hits
+            core_hits = sum(i >= es_ranks[j] for i in hit_inds)
+            core_misses = (membership.shape[0] - es_ranks[j]) - core_hits
         else:
-            core_hits = sum(i <= es_run_inds[j] for i in hit_inds)
-            core_misses = 1 + es_run_inds[j] - core_hits
+            core_hits = sum(i <= es_ranks[j] for i in hit_inds)
+            core_misses = 1 + es_ranks[j] - core_hits
         null_hits = num_hits - core_hits
         null_misses = num_misses - core_misses
-        # TODO: fishers exact test? odds ratio?
+        # fisher exact test (one-sided hypothesis that LE is enricheD)
+        fisher_p_value = fisher.pvalue(core_hits, core_misses, null_hits, null_misses).right_tail
+        # odds ratio
+        n = np.inf if null_hits == 0 else float(core_hits) / null_hits
+        d = np.inf if null_misses == 0 else float(core_misses) / null_misses
+        if np.isfinite(n) and np.isfinite(d):
+            if n == 0 and d == 0:
+                odds_ratio = np.nan
+            else:
+                odds_ratio = np.inf if d == 0 else n/d
+        elif np.isfinite(d):
+            odds_ratio = np.inf
+        else:
+            odds_ratio = np.nan if n == 0 else 0.0
         # histogram of ES null distribution
-        h = np.histogram(es_null[:,j], bins=Config.ES_NULL_BINS)[0]        
-        percent_neg = (100. * (es_null[:,j] < 0).sum() / es_null.shape[0])
+        null_es_val_hist = np.histogram(null_es_vals[:,j], 
+                                        bins=Config.ES_NULL_BINS)[0]
+        # quantiles of null es ranks
+        null_es_rank_quantiles = [round(quantile(null_es_ranks[:,j], q)) 
+                                  for q in Config.ES_QUANTILES]
+        # quantiles of resamples es values and ranks
+        resample_es_mean = resample_es_vals[:,j].mean()
+        resample_es_val_quantiles = [round(quantile(resample_es_vals[:,j], q),4)
+                                     for q in Config.ES_QUANTILES]
+        resample_es_rank_quantiles = [round(quantile(resample_es_ranks[:,j], q)) 
+                                      for q in Config.ES_QUANTILES]
         # create dictionary result
         res = Result()
-        res.ss_id = sample_sets[j]._id    
         res.es = es_vals[j]
-        res.nes = nes_vals[j]
+        res.es_rank = int(es_ranks[j])
         res.nominal_p_value = pvals[j]
-        res.fdr_q_value = fdr_q_values[j]
-        res.fwer_p_value = fwer_p_values[j]
-        res.rank_at_max = int(es_run_inds[j])
         res.core_hits = int(core_hits)
         res.core_misses = int(core_misses)
         res.null_hits = int(null_hits)
         res.null_misses = int(null_misses)
-        res.es_null_mean = es_null_means[j]
-        res.es_null_percent_neg = percent_neg
-        res.es_null_hist = h
-        yield res, es_null[:,j]
+        res.fisher_p_value = fisher_p_value
+        res.odds_ratio = odds_ratio
+        res.t_nes = nes_vals[j]
+        res.t_fdr_q_value = fdr_q_values[j]
+        res.t_fwer_p_value = fwer_p_values[j]
+        res.resample_es_mean = resample_es_mean
+        res.resample_es_val_quantiles = resample_es_val_quantiles
+        res.resample_es_rank_quantiles = resample_es_rank_quantiles
+        res.null_es_mean = es_null_means[j]
+        res.null_es_val_hist = null_es_val_hist
+        res.null_es_rank_quantiles = null_es_rank_quantiles
+        yield j, res, null_es_vals[:,j]
 
-def ssea_serial(weight_matrix_file, shape, sample_sets, config, 
+def ssea_serial(matrix_dir, shape, sample_sets, config, 
                 output_json_file, output_hist_file, 
                 startrow=None, endrow=None):
     '''
@@ -210,16 +244,15 @@ def ssea_serial(weight_matrix_file, shape, sample_sets, config,
     output_json_file: filename for writing results (JSON format)
     output_hist_file: filename for writing ES histograms
     '''
-    # open weight matrix memmap
-    weight_matrix = np.memmap(weight_matrix_file, 
-                              dtype=Config.MEMMAP_DTYPE, 
-                              mode='r', 
-                              shape=shape)
+    # initialize random number generator
+    rng = RandomState()
+    # open data matrix
+    bm = BigCountMatrix.open(matrix_dir)
     # determine range of matrix to process
     if startrow is None:
         startrow = 0
     if endrow is None:
-        endrow = weight_matrix.shape[0]
+        endrow = bm.shape[0]
     assert startrow < endrow
     # setup global ES histograms
     es_hists = {'null_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
@@ -231,19 +264,22 @@ def ssea_serial(weight_matrix_file, shape, sample_sets, config,
     for i in xrange(startrow, endrow):
         logging.debug("\tRow: %d (%d-%d)" % (i, startrow, endrow))
         # read from memmap
-        weights = np.array(weight_matrix[i,:], dtype=np.float)
+        counts = np.array(bm.counts[i,:], dtype=np.float)
         # remove 'nan' values        
-        sample_ids = np.isfinite(weights).nonzero()[0]
-        weights = weights[sample_ids]
+        sample_ids = np.isfinite(counts).nonzero()[0]
+        counts = counts[sample_ids]
+        size_factors = bm.size_factors[sample_ids]
+        # convert sample sets to membership vectors
+        membership = np.empty((len(sample_ids),len(sample_sets)), 
+                              dtype=BOOL_DTYPE)
+        for j,sample_set in enumerate(sample_sets):
+            membership[:,j] = sample_set.get_array(sample_ids)
         # run ssea
-        for res,es_null in ssea_run(sample_ids, weights, sample_sets,
-                                    weight_method_miss=config.weight_miss,
-                                    weight_method_hit=config.weight_hit,
-                                    weight_const=config.weight_const,
-                                    weight_noise=config.weight_noise,
-                                    perms=config.perms):
-            # save row id
+        for j,res,es_null in ssea_run(counts, size_factors, membership, 
+                                      rng, config):
+            # save row and column id
             res.t_id = i
+            res.ss_id = j
             # convert to json
             print >>outfileh, res.to_json()
             # update ES histograms
@@ -258,10 +294,9 @@ def ssea_serial(weight_matrix_file, shape, sample_sets, config,
     # save histograms to a file
     np.savez(output_hist_file, **es_hists)
     # cleanup
-    del weight_matrix
-    
+    bm.close()
 
-def ssea_parallel(weight_matrix_file, shape, sample_sets, config, 
+def ssea_parallel(matrix_dir, shape, sample_sets, config, 
                   output_json_file, output_hist_file): 
     '''
     main SSEA loop (multiprocessing implementation)
@@ -284,7 +319,7 @@ def ssea_parallel(weight_matrix_file, shape, sample_sets, config,
         hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
         worker_json_files.append(json_file)
         worker_hist_files.append(hist_file)
-        args = (weight_matrix_file, shape, sample_sets, config, 
+        args = (matrix_dir, shape, sample_sets, config, 
                 json_file, hist_file, startrow, endrow)        
         p = Process(target=ssea_serial, args=args)
         p.start()
@@ -316,23 +351,31 @@ def ssea_parallel(weight_matrix_file, shape, sample_sets, config,
     np.savez(output_hist_file, **es_hists)
 
 def compute_global_stats(es_hists_file, input_json_file, output_json_file):
-    # read es arrays
+    # read es histograms
     npzfile = np.load(es_hists_file)
     hists_null_pos = npzfile['null_pos']
     hists_null_neg = npzfile['null_neg']
     hists_obs_pos = npzfile['obs_pos']
     hists_obs_neg = npzfile['obs_neg']
     npzfile.close()
-    # compute totals (avoid division by zero)
-    hists_null_pos_counts = hists_null_pos.sum(axis=1)
-    hists_null_neg_counts = hists_null_neg.sum(axis=1)
-    hists_obs_pos_counts = hists_obs_pos.sum(axis=1)
-    hists_obs_neg_counts = hists_obs_neg.sum(axis=1)
-    # compute means
-    hists_null_neg_means = np.fabs((hists_null_neg * BIN_CENTERS_NEG).sum(axis=1) / 
-                                   hists_null_neg_counts.clip(1.0))
-    hists_null_pos_means = np.fabs((hists_null_pos * BIN_CENTERS_POS).sum(axis=1) / 
-                                   hists_null_pos_counts.clip(1.0))
+    # compute per-sample-set means
+    ss_null_pos_counts = hists_null_pos.sum(axis=1)
+    ss_null_neg_counts = hists_null_neg.sum(axis=1)
+    ss_obs_pos_counts = hists_obs_pos.sum(axis=1)
+    ss_obs_neg_counts = hists_obs_neg.sum(axis=1)
+    ss_null_neg_means = np.fabs((hists_null_neg * BIN_CENTERS_NEG).sum(axis=1) / 
+                                ss_null_neg_counts.clip(1.0))
+    ss_null_pos_means = np.fabs((hists_null_pos * BIN_CENTERS_POS).sum(axis=1) / 
+                                ss_null_pos_counts.clip(1.0))
+    # compute global means
+    g_null_pos = hists_null_pos.sum(axis=0)
+    g_null_neg = hists_null_neg.sum(axis=0)
+    g_obs_pos = hists_obs_pos.sum(axis=0)
+    g_obs_neg = hists_obs_neg.sum(axis=0)
+    g_null_neg_mean = np.fabs((g_null_pos * BIN_CENTERS_NEG).sum() / 
+                              g_null_neg.sum().clip(1.0))    
+    g_null_pos_mean = np.fabs((g_null_pos * BIN_CENTERS_POS).sum() / 
+                              g_null_pos.sum().clip(1.0))
     # parse report json and write new values
     fin = gzip.open(input_json_file, 'rb')
     fout = gzip.open(output_json_file, 'wb')
@@ -342,36 +385,51 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
         # get relevant columns
         i = res.ss_id
         es = res.es
-        # compute global nes and fdr        
+        # compute sample set and global NES and FDR q-values
         if es < 0:
-            if hists_null_neg_means[i] == 0:
-                global_nes = 0.0
+            if ss_null_neg_means[i] == 0:
+                ss_nes = 0.0
             else:
-                global_nes = es / hists_null_neg_means[i]            
+                ss_nes = es / ss_null_neg_means[i]
             es_bin = np.digitize((es,), BINS_NEG)
-            n = (1+hists_null_neg[i,:es_bin].sum()) / (1+float(hists_null_neg_counts[i]))
-            d = hists_obs_neg[i,:es_bin].sum() / float(hists_obs_neg_counts[i])
-        else:
-            if hists_null_pos_means[i] == 0:
+            ss_n = (1+hists_null_neg[i,:es_bin].sum()) / (1+float(ss_null_neg_counts[i]))
+            ss_d = hists_obs_neg[i,:es_bin].sum() / float(ss_obs_neg_counts[i])
+            if g_null_neg_mean == 0:
                 global_nes = 0.0
             else:
-                global_nes = es / hists_null_pos_means[i]            
+                global_nes = es / g_null_neg_mean
+            global_n = (1+g_null_neg[:es_bin].sum()) / (1+float(g_null_neg.sum()))
+            global_d = g_obs_neg[:es_bin].sum() / float(g_obs_neg.sum())
+        else:
+            if ss_null_pos_means[i] == 0:
+                ss_nes = 0.0
+            else:
+                ss_nes = es / ss_null_pos_means[i]            
             es_bin = np.digitize((es,), BINS_POS) - 1
-            n = (1+hists_null_pos[i,es_bin:].sum()) / (1+float(hists_null_pos_counts[i]))
-            d = hists_obs_pos[i,es_bin:].sum() / float(hists_obs_pos_counts[i])
-        global_fdr_qval = n / d
+            ss_n = (1+hists_null_pos[i,es_bin:].sum()) / (1+float(ss_null_pos_counts[i]))
+            ss_d = hists_obs_pos[i,es_bin:].sum() / float(ss_obs_pos_counts[i])
+            if g_null_pos_mean == 0:
+                global_nes = 0.0
+            else:
+                global_nes = es / g_null_pos_mean
+            global_n = (1+g_null_pos[es_bin:].sum()) / (1+float(g_null_neg.sum()))
+            global_d = g_obs_pos[es_bin:].sum() / float(g_obs_neg.sum())        
+        ss_fdr_q_value = ss_n / ss_d
+        global_fdr_q_value = global_n / global_d
         # update json dict
-        res.global_fdr_q_value = global_fdr_qval
+        res.ss_fdr_q_value = ss_fdr_q_value
+        res.ss_nes = ss_nes
+        res.global_fdr_q_value = global_fdr_q_value
         res.global_nes = global_nes
         # convert back to json
         print >>fout, res.to_json()
     fin.close()
     fout.close()
 
-def ssea_main(weight_matrix_file, row_metadata, col_metadata, sample_sets, 
+def ssea_main(matrix_dir, row_metadata, col_metadata, sample_sets, 
               config):
     '''
-    weight_matrix_file: numpy memmap with 2D weight data
+    matrix_dir: path to numpy memmap files with 2D numeric data
     row_metadata: list of Metadata objects corresponding to rows
     col_metadata: list of Metadata objects corresponding to columns
     sample_sets: list of SampleSet objects
@@ -394,11 +452,11 @@ def ssea_main(weight_matrix_file, row_metadata, col_metadata, sample_sets,
     if config.num_processes > 1:
         logging.info("Running SSEA in parallel with %d processes" % 
                      (config.num_processes))
-        ssea_parallel(weight_matrix_file, shape, sample_sets, config, 
+        ssea_parallel(matrix_dir, shape, sample_sets, config, 
                       tmp_json_file, es_hists_file)
     else:
         logging.info("Running SSEA in serial")
-        ssea_serial(weight_matrix_file, shape, sample_sets, config, 
+        ssea_serial(matrix_dir, shape, sample_sets, config, 
                     tmp_json_file, es_hists_file)
     # use ES null distributions to compute global statistics
     # and produce a report

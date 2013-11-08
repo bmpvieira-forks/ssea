@@ -3,6 +3,7 @@ cdef extern from "rng.h":
     int lcg_init_state()
     int lcg_rand(int seed)
     double lcg_double(int *seedp)
+    int lcg_range(int *seedp, int a, int b)
     long lcg_poisson_mult(int *seedp, double lam)
     long lcg_poisson_ptrs(int *seedp, double lam)
     long lcg_poisson(int *seedp, double lam)

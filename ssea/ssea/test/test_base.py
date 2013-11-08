@@ -49,7 +49,6 @@ class TestBase(unittest.TestCase):
         return
 
     def test_sample_set_smx_parser(self):
-        return
         # generate sample sets
         N = 1000
         minsize = 1
@@ -90,7 +89,6 @@ class TestBase(unittest.TestCase):
         os.remove('tmp')
 
     def test_sample_set_smt_parser(self):
-        return
         # generate sample sets
         N = 1000
         minsize = 1

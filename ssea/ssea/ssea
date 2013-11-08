@@ -19,7 +19,7 @@ import sys
 import os
 import argparse
 import logging
-import numpy as np
+import itertools
 
 __all__ = []
 
@@ -28,8 +28,8 @@ PROFILE = 1
 
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.base import SampleSet, Config, Metadata, \
-    weight_matrix_tsv_to_memmap, weight_matrix_memmap_copy
+from ssea.base import SampleSet, Config, Metadata
+from ssea.countdata import BigCountMatrix
 from ssea.algo import ssea_main
 
 # default command line options
@@ -97,10 +97,10 @@ USAGE
                         help='Value to interpret as missing/invalid '
                         'in weight matrix [default=%(default)s]')
     grp = parser.add_mutually_exclusive_group(required=True)
-    grp.add_argument('--memmap', action="store_true")
-    grp.add_argument('--tsv', action="store_true")
-    parser.add_argument('matrix_file', 
-                        help='File containing weight matrix')
+    grp.add_argument('--tsv', dest='tsv_file', default=None, 
+                     help='Tab-delimited text file containing data matrix')
+    grp.add_argument('--numpy', dest='numpy_dir', default=None, 
+                     help='Directory with numpy binary matrix files')
     # Process arguments
     args = parser.parse_args()
     # setup logging
@@ -124,12 +124,12 @@ USAGE
         if not os.path.exists(args.col_metadata_file):
             parser.error('col metadata file "%s" not found' % (args.col_metadata_file))
     # check matrix file
-    if not os.path.exists(args.matrix_file):
-        parser.error('matrix file "%s" not found' % (args.matrix_file))
-    if args.memmap and ((args.row_metadata_file is None) or 
-                        (args.col_metadata_file is None)):
-        parser.error("Must specify row/col metadata with memmap weight "
-                     "matrix input")
+    if args.numpy_dir is not None:
+        if not os.path.exists(args.numpy_dir):
+            parser.error('matrix path "%s" not found' % (args.numpy_dir))
+    if args.tsv_file is not None:
+        if not os.path.exists(args.tsv_file):
+            parser.error('matrix tsv file "%s" not found' % (args.tsv_file))
     # check sample sets
     smx_files = []
     if args.smx_files is not None:
@@ -145,40 +145,41 @@ USAGE
             smt_files.append(filename)
     if len(smx_files) == 0 and len(smt_files) == 0:
         parser.error("No sample sets specified")
+    # read/process weight matrix
+    logging.info("Converting matrix file")
+    if args.tsv_file is not None:
+        matrix_dir = os.path.join(config.output_dir, 
+                                  Config.MATRIX_DIR)
+        if not os.path.exists(matrix_dir):
+            os.makedirs(matrix_dir)
+        bm = BigCountMatrix.from_tsv(args.tsv_file, 
+                                     matrix_dir, 
+                                     na_values=args.na_values)
+        # TODO: add parameter
+        bm.estimate_size_factors('deseq')
+    else:
+        bm = BigCountMatrix.open(args.numpy_dir)
+        if bm.size_factors is None:
+            bm.estimate_size_factors('deseq')
+        matrix_dir = args.numpy_dir
     # read metadata
     if args.row_metadata_file is not None:
         logging.info("Reading row metadata")
         row_metadata = Metadata.parse_tsv(args.row_metadata_file)
     else:
-        row_metadata = None
+        id_iter = itertools.count()
+        row_metadata = [Metadata(id_iter.next(), x) for x in bm.rownames]
     if args.col_metadata_file is not None:
         logging.info("Reading column metadata")
         col_metadata = Metadata.parse_tsv(args.col_metadata_file)
     else:
-        col_metadata = None
+        id_iter = itertools.count()
+        col_metadata = [Metadata(id_iter.next(), x) for x in bm.colnames]
     # setup output directory
     if not os.path.exists(config.output_dir):
         logging.info("Creating output directory '%s'" % 
                      (config.output_dir))
-        os.makedirs(config.output_dir)
-    # read/process weight matrix
-    logging.info("Converting matrix file")
-    weight_matrix_file = os.path.join(config.output_dir, 
-                                      Config.WEIGHT_MATRIX_FILE)
-    if args.memmap:
-        weight_matrix_memmap_copy(args.matrix_file, 
-                                  weight_matrix_file,
-                                  row_metadata,
-                                  col_metadata,
-                                  dtype=Config.MEMMAP_DTYPE)
-    elif args.tsv:
-        row_metadata, col_metadata = \
-            weight_matrix_tsv_to_memmap(args.matrix_file, 
-                                        weight_matrix_file,
-                                        row_metadata=row_metadata,
-                                        col_metadata=col_metadata,
-                                        na_values=args.na_values,
-                                        dtype=Config.MEMMAP_DTYPE)
+        os.makedirs(config.output_dir)    
     # read sample sets
     logging.info("Reading sample sets")
     sample_sets = []
@@ -210,7 +211,7 @@ USAGE
     for i,sample_set in enumerate(sample_sets):
         sample_set._id = i
     # run ssea
-    ssea_main(weight_matrix_file, row_metadata, col_metadata, sample_sets, config)
+    ssea_main(matrix_dir, row_metadata, col_metadata, sample_sets, config)
     return 0
 
 if __name__ == "__main__":

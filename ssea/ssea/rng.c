@@ -30,6 +30,10 @@ double lcg_double(int *seedp)
 	return(((double) seed) / MODULUS);
 }
 
+int lcg_range(int *seedp, int a, int b)
+{
+	return(a + (int)((b - a + 1) * lcg_double(seedp)));
+}
 
 /*
 * copied from numpy.random source code

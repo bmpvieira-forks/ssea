@@ -14,12 +14,21 @@ import numpy as np
 
 BOOL_DTYPE = np.uint8
 FLOAT_DTYPE = np.float
-WEIGHT_METHODS = ['unweighted', 'weighted', 'log']
+
+class WeightMethod:
+    UNWEIGHTED = 0
+    WEIGHTED = 1
+    EXP = 2
+    LOG = 3
+WEIGHT_METHODS = {'unweighted': WeightMethod.UNWEIGHTED,
+                  'weighted': WeightMethod.WEIGHTED,
+                  'exp': WeightMethod.EXP,
+                  'log': WeightMethod.LOG}
 
 class NumpyJSONEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):
-            return obj.tolist() # or map(int, obj)
+            return obj.tolist()
         return json.JSONEncoder.default(self, obj)
 
 def timestamp():
@@ -50,8 +59,6 @@ def quantile(a, frac, limit=(), interpolation_method='fraction'):
     return score
 
 def hist_quantile(hist, bins, frac, left=None, right=None):
-    '''
-    '''
     assert frac >= 0.0
     assert frac <= 1.0
     hist_norm = np.zeros(len(bins), dtype=np.float)
@@ -89,13 +96,14 @@ class Config(object):
     # constants
     ES_NULL_NUM_BINS = 101
     ES_NULL_BINS = np.linspace(-1.0, 1.0, num=ES_NULL_NUM_BINS)
+    ES_QUANTILES = (0.0, 0.01, 0.05, 0.10, 0.25, 0.50, 
+                    0.75, 0.90, 0.95, 0.99, 1.0)
     # constants
-    MEMMAP_DTYPE = 'float32'
     SAMPLES_JSON_FILE = 'samples.json'
     METADATA_JSON_FILE = 'metadata.json'
     SAMPLE_SETS_JSON_FILE = 'sample_sets.json'
     CONFIG_JSON_FILE = 'config.json'
-    WEIGHT_MATRIX_FILE = 'weight_matrix.memmap'
+    MATRIX_DIR = 'matrix'
     RESULTS_JSON_FILE = 'results.json.gz'
     OUTPUT_HISTS_FILE = 'es_hists.npz'
     
@@ -104,17 +112,12 @@ class Config(object):
         self.output_dir = "SSEA_%s" % (timestamp())
         self.name = 'myssea'
         self.perms = 1000
-        self.weight_miss = 'log'
-        self.weight_hit = 'log'
-        self.weight_params = 1.0
-
-        self.count_model = 'poisson'
-        
-        self.noise_model = 'gaussian'
-        self.noise_mean = 1.0
-        
-        self.weight_const = 1.1
-        self.weight_noise = 0.1
+        self.resampling_iterations = 100
+        self.weight_miss = WeightMethod.LOG
+        self.weight_hit = WeightMethod.LOG
+        self.weight_param = 1.0
+        self.noise_loc = 1.0
+        self.noise_scale = 1.0
 
     def to_json(self):
         return json.dumps(self.__dict__)
@@ -148,25 +151,20 @@ class Config(object):
                          help='Number of permutations '
                          '[default=%(default)s]')
         grp.add_argument('--weight-miss', dest='weight_miss',
-                         choices=WEIGHT_METHODS, 
-                         default=self.weight_miss,
+                         choices=WEIGHT_METHODS.keys(), 
+                         default='log',
                          help='Weighting method for elements not in set ' 
                          '[default=%(default)s]')
         grp.add_argument('--weight-hit', dest='weight_hit', 
-                         choices=WEIGHT_METHODS, 
-                         default=self.weight_hit,
+                         choices=WEIGHT_METHODS.keys(), 
+                         default='log',
                          help='Weighting method for elements in set '
                          '[default=%(default)s]')
-        grp.add_argument('--weight-const', dest='weight_const', type=float,
-                         default=self.weight_const,
-                         help='Constant floating-point number to add to '
-                         'all weights prior to transformation '
+        grp.add_argument('--weight-param', dest='weight_param', type=float, 
+                         default=self.weight_param,
+                         help='Either log2(n + X) for log transform or '
+                         'pow(n,X) for exponential (root) transform '
                          '[default=%(default)s]')
-        grp.add_argument('--weight-noise', dest='weight_noise', type=float,
-                         default=self.weight_noise,
-                         help='Add uniform noise in the range [0.0-X) to '
-                         'the weights to increase robustness '
-                         '[default=%(default)s]') 
         return parser
 
     def log(self, log_func=logging.info):
@@ -178,8 +176,7 @@ class Config(object):
         log_func("permutations:            %d" % (self.perms))
         log_func("weight method miss:      %s" % (self.weight_miss))
         log_func("weight method hit:       %s" % (self.weight_hit))
-        log_func("weight constant:         %f" % (self.weight_const))
-        log_func("weight noise:            %s" % (self.weight_noise))
+        log_func("weight param:            %f" % (self.weight_param))
         log_func("----------------------------------")
 
     def parse_args(self, parser, args):
@@ -187,21 +184,18 @@ class Config(object):
         self.name = args.name
         self.num_processes = args.num_processes
         self.perms = max(1, args.perms)
-        # check weight methods and constant
-        self.weight_miss = str(args.weight_miss)
-        self.weight_hit = str(args.weight_hit)
-        self.weight_const = args.weight_const
-        self.weight_noise = args.weight_noise
-        if self.weight_const < 0.0:
-            parser.error('weight const < 0.0 invalid')
-        if (self.weight_const - self.weight_noise) < 0.0:            
-            parser.error('weight const minus noise < 0.0 invalid')
+        # check weight methods
+        if isinstance(args.weight_miss, basestring):
+            self.weight_miss = WEIGHT_METHODS[args.weight_miss]
+        if isinstance(args.weight_hit, basestring):
+            self.weight_hit = WEIGHT_METHODS[args.weight_hit]
+        self.weight_param = args.weight_param        
+        if self.weight_param < 0.0:
+            parser.error('weight param < 0.0 invalid')
         elif ((self.weight_miss == 'log' or self.weight_hit == 'log')):
-            if self.weight_const < 1.0:
-                parser.error('weight constant %f < 1.0 not allowed with '
-                             'log method' % (self.weight_const))
-            if (self.weight_const - self.weight_noise) < 1.0:
-                parser.error('weight constant minus noise is < 1.0')
+            if self.weight_param < 1.0:
+                parser.error('weight param %f < 1.0 not allowed with '
+                             'log methods' % (self.weight_param))
         # output directory
         self.output_dir = args.output_dir
         if os.path.exists(self.output_dir):
@@ -213,7 +207,7 @@ class Metadata(object):
     
     def __init__(self, _id=None, name=None, params=None):
         '''
-        _id: unique integer id (will be auto-generated if not provided)
+        _id: unique integer id
         name: string name
         params: dictionary of parameter-value data
         '''
@@ -224,7 +218,7 @@ class Metadata(object):
             self.params.update(params)
 
     def __repr__(self):
-        return ("<%s(_id=%d,name=%s,params=%s" % 
+        return ("<%s(_id=%d,name=%s,params=%s>" % 
                 (self.__class__.__name__, self._id, self.name, 
                  self.params))
     def __eq__(self, other):
@@ -350,7 +344,7 @@ class SampleSet(object):
             raise ParserError('Number of fields in differ in columns 1 and 2 '
                               'of sample set file')
         # get name -> _id map of samples
-        name_id_map = dict((s.name, s._id) for s in samples)            
+        name_id_map = dict((s.name, s._id) for s in samples)
         # create empty sample sets
         sample_sets = [SampleSet(id_iter.next(),n,d) 
                        for n,d in zip(names,descs)]
@@ -366,9 +360,10 @@ class SampleSet(object):
                 if not name:
                     continue
                 if name not in name_id_map:
-                    raise ParserError('Unrecognized sample name "%s" in '
-                                      'sample set "%s"' 
-                                      % (name, sample_sets[i].name))
+                    logging.warning('Unrecognized sample name "%s" in '
+                                    'sample set "%s"' 
+                                    % (name, sample_sets[i].name))
+                    continue
                 sample_id = name_id_map[name]
                 sample_sets[i].sample_ids.add(sample_id)
             lineno += 1
@@ -401,102 +396,21 @@ class SampleSet(object):
             sample_sets.append(SampleSet(id_iter.next(), name, desc, sample_ids))
         fileh.close()
         return sample_sets
-
-def weight_matrix_tsv_to_memmap(tsv_file, output_file,
-                                row_metadata=None,
-                                col_metadata=None, 
-                                na_values=None,
-                                dtype='float32'): 
-    '''
-    convert/copy a tab-delimited file containing numeric weight data
-    to a numpy memmap file.    
     
-    tsv_file: string path to tab-delimited matrix file
-    mmap_file: string path to mmap output file
-    row_metadata: list of Metadata objects corresponding to rows in file
-    col_metadata: list of Metadata objects corresponding to columns in file 
-    na_val: set of values corresponding to missing data 
-    '''
-    if na_values is None:
-        na_values = set(['NA'])
-    else:
-        na_values = set(na_values)
-        
-    if col_metadata is None:
-        # create new Metadata from column names
-        fileh = open(tsv_file, 'r')
-        header_fields = fileh.next().strip().split('\t')
-        id_iter = itertools.count()
-        col_metadata = [Metadata(id_iter.next(), f) 
-                        for f in header_fields[1:]]
-        fileh.close()
-    if row_metadata is None:
-        # create new Metadata from row names
-        row_metadata = []
-        id_iter = itertools.count()
-        with open(tsv_file, 'r') as fileh:
-            fileh.next() # skip header
-            for line in fileh:
-                name = line.strip().split('\t',1)[0]
-                row_metadata.append(Metadata(id_iter.next(), name))
-    # check column metadata for correctness 
-    fileh = open(tsv_file)
-    header_fields = fileh.next().strip().split('\t')
-    assert len(col_metadata) == (len(header_fields)-1)
-    # check that column names are in correct order
-    for i in xrange(len(col_metadata)):
-        assert col_metadata[i].name == header_fields[i+1]
-    # create mmap file
-    mat = np.memmap(output_file, dtype=dtype, mode='w+', 
-                    shape=(len(row_metadata), len(col_metadata)))
-    # write matrix data (converting missing values to np.nan)
-    for i,line in enumerate(fileh):
-        fields = line.strip().split('\t')
-        # check row metadata
-        assert fields[0] == row_metadata[i].name
-        # convert to floats and store in mmap      
-        mat[i,:] = [(np.nan if x in na_values else float(x))
-                    for x in fields[1:]]
-    fileh.close()
-    del mat
-    return row_metadata, col_metadata
-
-def weight_matrix_memmap_copy(input_file, output_file,
-                              row_metadata,
-                              col_metadata,
-                              dtype='float32'):
-    '''
-    copy a numpy memmap file
-    
-    input_file: input memmap file
-    output_file: output memmap file
-    row_metadata: Metadata objects for each row
-    col_metadata: Metadata objects for each column
-    dtype: numpy dtype of input array e.g. 'float32'
-    '''
-    # input memmap file
-    inp = np.memmap(input_file, dtype=dtype, mode='r', 
-                    shape=(len(row_metadata),len(col_metadata)))
-    # output memmap file
-    outp = np.memmap(output_file, dtype=dtype, mode='w+', 
-                     shape=(len(row_metadata), len(col_metadata)))
-    # copy
-    outp[:] = inp
-    del outp
-    del inp
-     
 class Result(object):
-    FIELDS = ('t_id', 'ss_id', 'es', 'nes', 'nominal_p_value',
-              'fdr_q_value', 'fwer_p_value', 'rank_at_max',
+    FIELDS = ('t_id', 'ss_id', 'es', 'es_rank', 'nominal_p_value',
               'core_hits', 'core_misses', 'null_hits', 'null_misses',
-              'es_null_hist', 'es_null_mean', 'es_null_percent_neg',
-              'global_nes', 'global_fdr_q_value')
+              'fisher_p_value', 'odds_ratio', 't_nes', 'ss_nes', 'global_nes',
+              't_fdr_q_value', 'ss_fdr_q_value', 'global_fdr_q_value',
+              'resample_es_mean', 'resample_es_val_quantiles', 
+              'resample_es_rank_quantiles',              
+              'null_es_mean', 'null_es_val_hist', 'null_es_rank_quantiles')
     
     def __init__(self):
         for x in Result.FIELDS:
             setattr(self, x, None)
     
-    def to_json(self):
+    def to_json(self): 
         return json.dumps(self.__dict__, cls=NumpyJSONEncoder)
     
     @staticmethod
