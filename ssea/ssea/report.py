@@ -18,15 +18,16 @@ matplotlib.use('Agg')
 
 # third-party packages
 import numpy as np
+from jinja2 import Environment, PackageLoader
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+import matplotlib.cm as cm
 from matplotlib import figure
-from jinja2 import Environment, PackageLoader
 
 # local imports
 from ssea import __version__, __date__, __updated__
 from ssea.kernel import ssea_kernel2, RandomState, power_transform
-from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile
+from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile, quantile_sorted
 from countdata import BigCountMatrix
 
 # setup path to web files
@@ -164,7 +165,8 @@ def ssea_rerun(sample_ids, counts, size_factors, sample_set, seed, config):
     membership[:,0] = sample_set.get_array(sample_ids)
     # reproduce previous run
     rng = RandomState(seed)
-    norm_counts, ranks, es_vals, es_ranks, es_runs = \
+    (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
+     es_vals, es_ranks, es_runs) = \
         ssea_kernel2(counts, size_factors, membership, rng,
                      resample_counts=False,
                      permute_samples=False,
@@ -174,11 +176,6 @@ def ssea_rerun(sample_ids, counts, size_factors, sample_set, seed, config):
                      method_miss=config.weight_miss,
                      method_hit=config.weight_hit,
                      method_param=config.weight_param)
-    # perform power transform and adjust by constant
-    norm_counts_miss = power_transform(norm_counts, config.weight_miss, 
-                                       config.weight_param)
-    norm_counts_hit = power_transform(norm_counts, config.weight_hit, 
-                                      config.weight_param)    
     # make object for plotting
     m = membership[ranks,0]
     hit_indexes = (m > 0).nonzero()[0]
@@ -193,6 +190,69 @@ def ssea_rerun(sample_ids, counts, size_factors, sample_set, seed, config):
     d.weights_miss = norm_counts_miss[ranks]
     d.weights_hit = norm_counts_hit[ranks]
     return d
+
+def plot_enrichment2(result, sseadata,
+                     title, 
+                     plot_conf_int=True, 
+                     conf_int=0.95, 
+                     fig=None):
+    if fig is None:
+        fig = plt.Figure()
+    else:
+        fig.clf()
+    gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
+    # running enrichment score
+    ax0 = fig.add_subplot(gs[0])
+    x = np.arange(len(sseadata.es_run))
+    y = sseadata.es_run
+    ax0.plot(x, y, lw=2, color='k', label='Enrichment profile')
+    ax0.axhline(y=0, color='gray')
+    ax0.axvline(x=sseadata.es_rank, lw=1, linestyle='--', color='black')
+    # contour maps of resampled and null distributions
+    xbins = np.linspace(0, len(sseadata.es_run), num=Config.ES_RANK_NUM_BINS)
+    ybins = np.linspace(-1.0, 1.0, num=Config.ES_VAL_NUM_BINS)
+    X = (xbins[:-1] + xbins[1:]) / 2.0
+    Y = (ybins[:-1] + ybins[1:]) / 2.0
+    # null distribution
+    Z = np.array(result.null_es_hist2d)
+    ax0.contour(X, Y, Z,               
+                cmap=cm.winter,
+                alpha=0.9,
+                extend='both')
+    # resampled distribution
+    Z = np.array(result.resample_es_hist2d)    
+    ax0.contour(X, Y, Z,
+                cmap=cm.autumn,
+                alpha=1.0,
+                extend='both')
+    ax0.set_xlim((0, len(sseadata.es_run)))
+    ax0.set_ylim((-1.0, 1.0))
+    ax0.grid(True)
+    ax0.set_xticklabels([])
+    ax0.set_ylabel('Enrichment score (ES)')
+    ax0.set_title('Enrichment plot: %s' % (title))
+    # membership in sample set
+    ax1 = fig.add_subplot(gs[1])
+    ax1.vlines(sseadata.hit_indexes, ymin=0, ymax=1, lw=0.25, 
+               color='black', label='Hits')
+    ax1.set_xlim((0, len(sseadata.es_run)))
+    ax1.set_ylim((0, 1))
+    ax1.set_xticks([])
+    ax1.set_yticks([])
+    ax1.set_xticklabels([])
+    ax1.set_yticklabels([])
+    ax1.set_ylabel('Set')
+    # weights
+    ax2 = fig.add_subplot(gs[2])
+    ax2.plot(sseadata.weights_miss, color='blue')
+    ax2.plot(sseadata.weights_hit, color='red')
+    #ax2.plot(weights_hit, color='red')
+    ax2.set_xlim((0, len(sseadata.es_run)))
+    ax2.set_xlabel('Samples')
+    ax2.set_ylabel('Weights')
+    # draw
+    fig.tight_layout()
+    return fig
 
 def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss, 
                     weights_hit, es, null_es_mean, es_null_bins, 
@@ -301,32 +361,38 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
     d = {}
     if reportconfig.create_plots:        
         # enrichment plot
-        fig = plot_enrichment(sseadata.es_run, 
-                              sseadata.es_rank,
-                              sseadata.hit_indexes, 
-                              sseadata.weights_miss,
-                              sseadata.weights_hit,
-                              sseadata.es,  
-                              result.null_es_mean, 
-                              Config.ES_NULL_BINS,
-                              result.null_es_val_hist,
-                              title=sample_set.name, 
-                              plot_conf_int=reportconfig.plot_conf_int, 
-                              conf_int=reportconfig.conf_int,
-                              fig=global_fig)
+        fig = plot_enrichment2(result, sseadata, 
+                               title=sample_set.name, 
+                               plot_conf_int=reportconfig.plot_conf_int, 
+                               conf_int=reportconfig.conf_int,
+                               fig=global_fig)
+#         fig = plot_enrichment(sseadata.es_run, 
+#                               sseadata.es_rank,
+#                               sseadata.hit_indexes, 
+#                               sseadata.weights_miss,
+#                               sseadata.weights_hit,
+#                               sseadata.es,  
+#                               result.null_es_mean, 
+#                               Config.ES_NULL_BINS,
+#                               result.null_es_val_hist,
+#                               title=sample_set.name, 
+#                               plot_conf_int=reportconfig.plot_conf_int, 
+#                               conf_int=reportconfig.conf_int,
+#                               fig=global_fig)
         eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
         eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_pdf))
         # null distribution plot
-        plot_null_distribution(result.es, 
-                               Config.ES_NULL_BINS,
-                               result.null_es_val_hist, 
-                               fig=global_fig)
+        H = np.array(result.null_es_hist2d)
+        fig = plot_null_distribution(result.es, 
+                                     Config.ES_VAL_BINS, 
+                                     H.sum(axis=1),
+                                     fig=global_fig)
         nplot_png = '%s.%s.null.png' % (rowmeta.name, sample_set.name)
         nplot_pdf = '%s.%s.null.pdf' % (rowmeta.name, sample_set.name)
-        global_fig.savefig(os.path.join(reportconfig.output_dir, nplot_png))        
-        global_fig.savefig(os.path.join(reportconfig.output_dir, nplot_pdf))
+        fig.savefig(os.path.join(reportconfig.output_dir, nplot_png))        
+        fig.savefig(os.path.join(reportconfig.output_dir, nplot_pdf))
         d.update({'eplot_png': eplot_png,
                   'nplot_png': nplot_png})
         d.update({'eplot_pdf': eplot_pdf,
@@ -518,7 +584,6 @@ def report(config):
                                           Config.SAMPLES_JSON_FILE)
     sample_sets_json_file = os.path.join(config.input_dir,
                                          Config.SAMPLE_SETS_JSON_FILE)
-    matrix_dir = os.path.join(config.input_dir, Config.MATRIX_DIR)
     config_json_file = os.path.join(config.input_dir, 
                                     Config.CONFIG_JSON_FILE)
     # load input files
@@ -527,7 +592,7 @@ def report(config):
     sample_sets = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
     runconfig = Config.parse_json(config_json_file)
     # open data matrix
-    bm = BigCountMatrix.open(matrix_dir)
+    bm = BigCountMatrix.open(runconfig.matrix_dir)
     # write filtered results to output file
     filtered_results_file = os.path.join(config.output_dir, 
                                          'filtered_results.json')
