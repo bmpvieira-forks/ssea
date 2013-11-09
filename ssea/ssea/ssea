@@ -95,12 +95,7 @@ USAGE
     parser.add_argument('--na-value', dest='na_values', 
                         default=[DEFAULT_NA_VALUE], action='append',
                         help='Value to interpret as missing/invalid '
-                        'in weight matrix [default=%(default)s]')
-    grp = parser.add_mutually_exclusive_group(required=True)
-    grp.add_argument('--tsv', dest='tsv_file', default=None, 
-                     help='Tab-delimited text file containing data matrix')
-    grp.add_argument('--numpy', dest='numpy_dir', default=None, 
-                     help='Directory with numpy binary matrix files')
+                        'in weight matrix [default=%(default)s]')  
     # Process arguments
     args = parser.parse_args()
     # setup logging
@@ -112,7 +107,6 @@ USAGE
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     # initialize configuration
     config.parse_args(parser, args)
-    config.log()
     # sample set size limits
     smin = max(1, args.smin)
     smax = max(0, args.smax)
@@ -123,13 +117,6 @@ USAGE
     if args.col_metadata_file is not None:
         if not os.path.exists(args.col_metadata_file):
             parser.error('col metadata file "%s" not found' % (args.col_metadata_file))
-    # check matrix file
-    if args.numpy_dir is not None:
-        if not os.path.exists(args.numpy_dir):
-            parser.error('matrix path "%s" not found' % (args.numpy_dir))
-    if args.tsv_file is not None:
-        if not os.path.exists(args.tsv_file):
-            parser.error('matrix tsv file "%s" not found' % (args.tsv_file))
     # check sample sets
     smx_files = []
     if args.smx_files is not None:
@@ -146,22 +133,19 @@ USAGE
     if len(smx_files) == 0 and len(smt_files) == 0:
         parser.error("No sample sets specified")
     # read/process weight matrix
-    logging.info("Converting matrix file")
     if args.tsv_file is not None:
-        matrix_dir = os.path.join(config.output_dir, 
-                                  Config.MATRIX_DIR)
-        if not os.path.exists(matrix_dir):
-            os.makedirs(matrix_dir)
+        logging.info("Converting text matrix file to binary format")
+        if not os.path.exists(config.matrix_dir):
+            os.makedirs(config.matrix_dir)
         bm = BigCountMatrix.from_tsv(args.tsv_file, 
-                                     matrix_dir, 
+                                     config.matrix_dir, 
                                      na_values=args.na_values)
         # TODO: add parameter
         bm.estimate_size_factors('deseq')
     else:
-        bm = BigCountMatrix.open(args.numpy_dir)
+        bm = BigCountMatrix.open(args.matrix_dir)
         if bm.size_factors is None:
             bm.estimate_size_factors('deseq')
-        matrix_dir = args.numpy_dir
     # read metadata
     if args.row_metadata_file is not None:
         logging.info("Reading row metadata")
@@ -210,8 +194,10 @@ USAGE
     # re-assign contiguous identifiers
     for i,sample_set in enumerate(sample_sets):
         sample_set._id = i
+    # show final configuration
+    config.log()
     # run ssea
-    ssea_main(matrix_dir, row_metadata, col_metadata, sample_sets, config)
+    ssea_main(config, sample_sets, row_metadata, col_metadata)
     return 0
 
 if __name__ == "__main__":

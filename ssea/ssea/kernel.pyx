@@ -97,7 +97,8 @@ def normalize_counts(np.ndarray[FLOAT_t, ndim=1] counts not None,
         counts[i] = counts[i] / size_factors[i]
         # add gaussian noise
         if add_noise:
-            counts[i] += rng.lcg_normal(&r.seed, noise_loc, noise_scale)
+            counts[i] += rng.lcg_double(&r.seed) * noise_scale
+            #counts[i] += rng.lcg_normal(&r.seed, noise_loc, noise_scale)
             if counts[i] < 0:
                 counts[i] = 0
 
@@ -259,7 +260,8 @@ def ssea_kernel2(np.ndarray[FLOAT_t, ndim=1] counts not None,
                     membership=membership,
                     ranks=ranks,
                     perm=perm)
-    return norm_counts, ranks, es_vals, es_ranks, es_runs
+    return (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
+            es_vals, es_ranks, es_runs)
 
 
 @cython.boundscheck(False)

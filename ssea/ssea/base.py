@@ -34,6 +34,16 @@ class NumpyJSONEncoder(json.JSONEncoder):
 def timestamp():
     return datetime.fromtimestamp(time()).strftime('%Y-%m-%d-%H-%M-%S-%f')
 
+def quantile_sorted(a, frac):
+    def _interpolate(a, b, fraction):
+        return a + (b - a)*fraction;
+    idx = frac * (a.shape[0] - 1)
+    if (idx % 1 == 0):
+        score = a[idx]
+    else:
+        score = _interpolate(a[int(idx)], a[int(idx) + 1], idx % 1)
+    return score
+
 def quantile(a, frac, limit=(), interpolation_method='fraction'):
     '''copied verbatim from scipy code (scipy.org)'''
     def _interpolate(a, b, fraction):
@@ -94,8 +104,9 @@ class ParserError(Exception):
 
 class Config(object):
     # constants
-    ES_NULL_NUM_BINS = 101
-    ES_NULL_BINS = np.linspace(-1.0, 1.0, num=ES_NULL_NUM_BINS)
+    MAX_ES_POINTS = 100
+    NUM_NULL_ES_BINS = 101
+    NULL_ES_BINS = np.linspace(-1.0, 1.0, num=NUM_NULL_ES_BINS)
     ES_QUANTILES = (0.0, 0.01, 0.05, 0.10, 0.25, 0.50, 
                     0.75, 0.90, 0.95, 0.99, 1.0)
     # constants
@@ -110,6 +121,7 @@ class Config(object):
     def __init__(self):
         self.num_processes = 1
         self.output_dir = "SSEA_%s" % (timestamp())
+        self.matrix_dir = None
         self.name = 'myssea'
         self.perms = 1000
         self.resampling_iterations = 100
@@ -165,18 +177,24 @@ class Config(object):
                          help='Either log2(n + X) for log transform or '
                          'pow(n,X) for exponential (root) transform '
                          '[default=%(default)s]')
+        grp2 = parser.add_mutually_exclusive_group(required=True)
+        grp2.add_argument('--tsv', dest='tsv_file', default=None, 
+                         help='Tab-delimited text file containing data matrix')
+        grp2.add_argument('--matrix', dest='matrix_dir', default=None, 
+                         help='Directory with binary memory-mapped matrix files') 
         return parser
 
     def log(self, log_func=logging.info):
         log_func("Parameters")
         log_func("----------------------------------")
         log_func("name:                    %s" % (self.name))
-        log_func("output directory:        %s" % (self.output_dir))
         log_func("num processes:           %d" % (self.num_processes))
         log_func("permutations:            %d" % (self.perms))
         log_func("weight method miss:      %s" % (self.weight_miss))
         log_func("weight method hit:       %s" % (self.weight_hit))
         log_func("weight param:            %f" % (self.weight_param))
+        log_func("output directory:        %s" % (self.output_dir))
+        log_func("input matrix directory:  %s" % (self.matrix_dir))
         log_func("----------------------------------")
 
     def parse_args(self, parser, args):
@@ -201,6 +219,15 @@ class Config(object):
         if os.path.exists(self.output_dir):
             parser.error("output directory '%s' already exists" % 
                          (self.output_dir))
+        # matrix input directory
+        if args.matrix_dir is not None:
+            if not os.path.exists(args.matrix_dir):
+                parser.error('matrix path "%s" not found' % (args.matrix_dir))
+            self.matrix_dir = args.matrix_dir
+        if args.tsv_file is not None:
+            if not os.path.exists(args.tsv_file):
+                parser.error('matrix tsv file "%s" not found' % (args.tsv_file))
+            self.matrix_dir = os.path.join(self.output_dir, Config.MATRIX_DIR)
 
 class Metadata(object):
     __slots__ = ('_id', 'name', 'params')
@@ -402,9 +429,9 @@ class Result(object):
               'core_hits', 'core_misses', 'null_hits', 'null_misses',
               'fisher_p_value', 'odds_ratio', 't_nes', 'ss_nes', 'global_nes',
               't_fdr_q_value', 'ss_fdr_q_value', 'global_fdr_q_value',
-              'resample_es_mean', 'resample_es_val_quantiles', 
-              'resample_es_rank_quantiles',              
-              'null_es_mean', 'null_es_val_hist', 'null_es_rank_quantiles')
+              'resample_es_vals', 'resample_es_ranks', 'resample_es_mean',
+              'null_es_vals', 'null_es_ranks', 'null_es_mean', 
+              'null_es_hist')
     
     def __init__(self):
         for x in Result.FIELDS:

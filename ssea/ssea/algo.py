@@ -14,12 +14,16 @@ import numpy as np
 # local imports
 import ssea.cfisher as fisher
 from ssea.kernel import ssea_kernel2, RandomState
-from base import BOOL_DTYPE, Config, Result, chunk, quantile
+from base import BOOL_DTYPE, Config, Result, chunk, quantile_sorted
 from countdata import BigCountMatrix
 
 # improves readability of code
-KernelResult = namedtuple('KernelResult', ('norm_counts', 'ranks', 
-                                           'es_vals', 'es_ranks', 
+KernelResult = namedtuple('KernelResult', ('ranks',
+                                           'norm_counts', 
+                                           'norm_counts_miss',
+                                           'norm_counts_hit',
+                                           'es_vals', 
+                                           'es_ranks', 
                                            'es_runs'))
 
 # enrichment score histogram bins
@@ -169,8 +173,26 @@ def ssea_run(counts, size_factors, membership, rng, config):
             fwerp = (1+(nes_null_max >= nes).sum()) / (1+float(len(nes_null_max)))
         fdr_q_values[j] = n / d
         fwer_p_values[j] = fwerp
-    # setup result objects
+    # setup result objects    
     for j in xrange(membership.shape[1]):
+        # create result object
+        res = Result()
+        res.rand_seed = rand_seed
+        res.es = es_vals[j]
+        res.es_rank = int(es_ranks[j])
+        res.nominal_p_value = pvals[j]
+        res.t_nes = nes_vals[j]
+        res.t_fdr_q_value = fdr_q_values[j]
+        res.t_fwer_p_value = fwer_p_values[j]
+        # save some of the resampled es points 
+        res.resample_es_vals = resample_es_vals[:Config.MAX_ES_POINTS,j]
+        res.resample_es_ranks = resample_es_ranks[:Config.MAX_ES_POINTS,j]
+        res.resample_es_mean = resample_es_vals[:,j].mean()
+        res.null_es_vals = null_es_vals[:Config.MAX_ES_POINTS,j]
+        res.null_es_ranks = null_es_ranks[:Config.MAX_ES_POINTS,j]
+        res.null_es_mean = es_null_means[j]
+        res.null_es_hist = np.histogram(null_es_vals[:,j], 
+                                        bins=Config.NULL_ES_BINS)[0]
         # get indexes of hits in this set
         m = membership[ranks,j]
         hit_inds = (m > 0).nonzero()[0]       
@@ -199,39 +221,13 @@ def ssea_run(counts, size_factors, membership, rng, config):
             odds_ratio = np.inf
         else:
             odds_ratio = np.nan if n == 0 else 0.0
-        # histogram of ES null distribution
-        null_es_val_hist = np.histogram(null_es_vals[:,j], 
-                                        bins=Config.ES_NULL_BINS)[0]
-        # quantiles of null es ranks
-        null_es_rank_quantiles = [round(quantile(null_es_ranks[:,j], q)) 
-                                  for q in Config.ES_QUANTILES]
-        # quantiles of resamples es values and ranks
-        resample_es_mean = resample_es_vals[:,j].mean()
-        resample_es_val_quantiles = [round(quantile(resample_es_vals[:,j], q),4)
-                                     for q in Config.ES_QUANTILES]
-        resample_es_rank_quantiles = [round(quantile(resample_es_ranks[:,j], q)) 
-                                      for q in Config.ES_QUANTILES]
         # create dictionary result
-        res = Result()
-        res.rand_seed = rand_seed
-        res.es = es_vals[j]
-        res.es_rank = int(es_ranks[j])
-        res.nominal_p_value = pvals[j]
         res.core_hits = int(core_hits)
         res.core_misses = int(core_misses)
         res.null_hits = int(null_hits)
         res.null_misses = int(null_misses)
         res.fisher_p_value = fisher_p_value
         res.odds_ratio = odds_ratio
-        res.t_nes = nes_vals[j]
-        res.t_fdr_q_value = fdr_q_values[j]
-        res.t_fwer_p_value = fwer_p_values[j]
-        res.resample_es_mean = resample_es_mean
-        res.resample_es_val_quantiles = resample_es_val_quantiles
-        res.resample_es_rank_quantiles = resample_es_rank_quantiles
-        res.null_es_mean = es_null_means[j]
-        res.null_es_val_hist = null_es_val_hist
-        res.null_es_rank_quantiles = null_es_rank_quantiles
         yield j, res, null_es_vals[:,j]
 
 def ssea_serial(matrix_dir, shape, sample_sets, config, 
@@ -429,14 +425,12 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
     fin.close()
     fout.close()
 
-def ssea_main(matrix_dir, row_metadata, col_metadata, sample_sets, 
-              config):
+def ssea_main(config, sample_sets, row_metadata, col_metadata):
     '''
-    matrix_dir: path to numpy memmap files with 2D numeric data
+    config: Config object
+    sample_sets: list of SampleSet objects
     row_metadata: list of Metadata objects corresponding to rows
     col_metadata: list of Metadata objects corresponding to columns
-    sample_sets: list of SampleSet objects
-    config: Config object
     '''
     # setup output directory
     if not os.path.exists(config.output_dir):
@@ -455,14 +449,15 @@ def ssea_main(matrix_dir, row_metadata, col_metadata, sample_sets,
     if config.num_processes > 1:
         logging.info("Running SSEA in parallel with %d processes" % 
                      (config.num_processes))
-        ssea_parallel(matrix_dir, shape, sample_sets, config, 
+        ssea_parallel(config.matrix_dir, shape, sample_sets, config, 
                       tmp_json_file, es_hists_file)
     else:
         logging.info("Running SSEA in serial")
-        ssea_serial(matrix_dir, shape, sample_sets, config, 
+        ssea_serial(config.matrix_dir, shape, sample_sets, config, 
                     tmp_json_file, es_hists_file)
     # use ES null distributions to compute global statistics
     # and produce a report
+    logging.info("Computing global statistics")
     json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
     compute_global_stats(es_hists_file, tmp_json_file, json_file)
     # cleanup

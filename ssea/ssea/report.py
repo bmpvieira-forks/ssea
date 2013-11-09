@@ -205,28 +205,15 @@ def plot_enrichment2(result, sseadata,
     ax0 = fig.add_subplot(gs[0])
     x = np.arange(len(sseadata.es_run))
     y = sseadata.es_run
+    ax0.scatter(result.resample_es_ranks, result.resample_es_vals,
+                c='r', s=25.0, alpha=0.3, edgecolors='none')
+    ax0.scatter(result.null_es_ranks, result.null_es_vals,
+                c='b', s=25.0, alpha=0.3, edgecolors='none')
     ax0.plot(x, y, lw=2, color='k', label='Enrichment profile')
     ax0.axhline(y=0, color='gray')
     ax0.axvline(x=sseadata.es_rank, lw=1, linestyle='--', color='black')
-    # contour maps of resampled and null distributions
-    xbins = np.linspace(0, len(sseadata.es_run), num=Config.ES_RANK_NUM_BINS)
-    ybins = np.linspace(-1.0, 1.0, num=Config.ES_VAL_NUM_BINS)
-    X = (xbins[:-1] + xbins[1:]) / 2.0
-    Y = (ybins[:-1] + ybins[1:]) / 2.0
-    # null distribution
-    Z = np.array(result.null_es_hist2d)
-    ax0.contour(X, Y, Z,               
-                cmap=cm.winter,
-                alpha=0.9,
-                extend='both')
-    # resampled distribution
-    Z = np.array(result.resample_es_hist2d)    
-    ax0.contour(X, Y, Z,
-                cmap=cm.autumn,
-                alpha=1.0,
-                extend='both')
     ax0.set_xlim((0, len(sseadata.es_run)))
-    ax0.set_ylim((-1.0, 1.0))
+    #ax0.set_ylim((-1.0, 1.0))
     ax0.grid(True)
     ax0.set_xticklabels([])
     ax0.set_ylabel('Enrichment score (ES)')
@@ -325,7 +312,7 @@ def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss,
     fig.tight_layout()
     return fig
 
-def plot_null_distribution(es, es_null_bins, null_es_val_hist, 
+def plot_null_distribution(es, es_null_bins, null_es_hist, 
                            fig=None):
     if fig is None:
         fig = plt.Figure()
@@ -333,7 +320,7 @@ def plot_null_distribution(es, es_null_bins, null_es_val_hist,
         fig.clf()
     # get coords of bars    
     left = es_null_bins[:-1]
-    height = null_es_val_hist
+    height = null_es_hist
     width = [(r-l) for l,r in zip(es_null_bins[:-1],es_null_bins[1:])]
     # make plot
     ax = fig.add_subplot(1,1,1)
@@ -342,10 +329,10 @@ def plot_null_distribution(es, es_null_bins, null_es_val_hist,
     ax.set_title('Random ES distribution')
     ax.set_ylabel('P(ES)')
     # calculate percent neg
-    percent_neg = sum(null_es_val_hist[i] for i in xrange(len(null_es_val_hist))
-                      if es_null_bins[i] < 0)
-    percent_neg /= float(sum(null_es_val_hist))
-    ax.set_xlabel('ES (Sets with neg scores: %.0f%%)' % 
+    percent_neg = 100.0 * sum(null_es_hist[i] for i in xrange(len(null_es_hist))
+                              if es_null_bins[i] < 0)
+    percent_neg /= float(sum(null_es_hist))
+    ax.set_xlabel('ES (Sets with neg scores: %.1f%%)' % 
                   (percent_neg))
     return fig
 
@@ -384,10 +371,9 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_pdf))
         # null distribution plot
-        H = np.array(result.null_es_hist2d)
         fig = plot_null_distribution(result.es, 
-                                     Config.ES_VAL_BINS, 
-                                     H.sum(axis=1),
+                                     Config.NULL_ES_BINS,
+                                     result.null_es_hist,
                                      fig=global_fig)
         nplot_png = '%s.%s.null.png' % (rowmeta.name, sample_set.name)
         nplot_pdf = '%s.%s.null.pdf' % (rowmeta.name, sample_set.name)
