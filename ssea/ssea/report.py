@@ -191,11 +191,8 @@ def ssea_rerun(sample_ids, counts, size_factors, sample_set, seed, config):
     d.weights_hit = norm_counts_hit[ranks]
     return d
 
-def plot_enrichment2(result, sseadata,
-                     title, 
-                     plot_conf_int=True, 
-                     conf_int=0.95, 
-                     fig=None):
+def plot_enrichment(result, sseadata,
+                    title, fig=None):
     if fig is None:
         fig = plt.Figure()
     else:
@@ -205,10 +202,10 @@ def plot_enrichment2(result, sseadata,
     ax0 = fig.add_subplot(gs[0])
     x = np.arange(len(sseadata.es_run))
     y = sseadata.es_run
-    ax0.scatter(result.resample_es_ranks, result.resample_es_vals,
-                c='r', s=25.0, alpha=0.3, edgecolors='none')
-    ax0.scatter(result.null_es_ranks, result.null_es_vals,
-                c='b', s=25.0, alpha=0.3, edgecolors='none')
+    p1 = ax0.scatter(result.resample_es_ranks, result.resample_es_vals,
+                     c='r', s=25.0, alpha=0.3, edgecolors='none')
+    p2 = ax0.scatter(result.null_es_ranks, result.null_es_vals,
+                     c='b', s=25.0, alpha=0.3, edgecolors='none')
     ax0.plot(x, y, lw=2, color='k', label='Enrichment profile')
     ax0.axhline(y=0, color='gray')
     ax0.axvline(x=sseadata.es_rank, lw=1, linestyle='--', color='black')
@@ -217,7 +214,13 @@ def plot_enrichment2(result, sseadata,
     ax0.grid(True)
     ax0.set_xticklabels([])
     ax0.set_ylabel('Enrichment score (ES)')
-    ax0.set_title('Enrichment plot: %s' % (title))
+    ax0.set_title(title)
+    legend = ax0.legend((p1,p2), ('Resampled ES', 'Null ES'), 'upper right',
+                        numpoints=1, scatterpoints=1, 
+                        prop={'size': 'xx-small'})
+    # The frame is matplotlib.patches.Rectangle instance surrounding the legend.
+    frame = legend.get_frame()
+    frame.set_linewidth(0)
     # membership in sample set
     ax1 = fig.add_subplot(gs[1])
     ax1.vlines(sseadata.hit_indexes, ymin=0, ymax=1, lw=0.25, 
@@ -231,6 +234,7 @@ def plot_enrichment2(result, sseadata,
     ax1.set_ylabel('Set')
     # weights
     ax2 = fig.add_subplot(gs[2])
+    # TODO: if hit and miss weights differ add a legend
     ax2.plot(sseadata.weights_miss, color='blue')
     ax2.plot(sseadata.weights_hit, color='red')
     #ax2.plot(weights_hit, color='red')
@@ -241,76 +245,76 @@ def plot_enrichment2(result, sseadata,
     fig.tight_layout()
     return fig
 
-def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss, 
-                    weights_hit, es, null_es_mean, es_null_bins, 
-                    null_es_val_hist, title, plot_conf_int=True, conf_int=0.95, 
-                    fig=None):
-    if fig is None:
-        fig = plt.Figure()
-    else:
-        fig.clf()
-    gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
-    # running enrichment score
-    ax0 = fig.add_subplot(gs[0])
-    x = np.arange(len(running_es))
-    y = running_es
-    ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
-    ax0.axhline(y=0, color='gray')
-    ax0.axvline(x=rank_at_max, lw=1, linestyle='--', color='black')
-    # confidence interval
-    if plot_conf_int:
-        if es < 0:
-            inds = (es_null_bins <= 0).nonzero()[0]
-            left, right = -1.0, 0.0
-        else:
-            inds = (es_null_bins >= 0).nonzero()[0]
-            left, right = 0.0, 1.0
-        null_es_val_hist = np.array(null_es_val_hist, dtype=np.float)
-        bins = es_null_bins[inds]
-        hist = null_es_val_hist[inds[:-1]]
-        ci_lower = hist_quantile(hist, bins, 1.0-conf_int, left, right)                
-        ci_upper = hist_quantile(hist, bins, conf_int, left, right)
-        lower_bound = np.repeat(ci_lower, len(x))
-        upper_bound = np.repeat(ci_upper, len(x))
-        ax0.axhline(y=null_es_mean, lw=2, color='red', ls=':')
-        ax0.fill_between(x, lower_bound, upper_bound,
-                         lw=0, facecolor='yellow', alpha=0.5,
-                         label='%.2f CI' % (100. * conf_int))
-        # here we use the where argument to only fill the region 
-        # where the ES is above the confidence interval boundary
-        if es < 0:
-            ax0.fill_between(x, y, lower_bound, where=y<lower_bound, 
-                             lw=0, facecolor='blue', alpha=0.5)
-        else:
-            ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
-                             lw=0, facecolor='blue', alpha=0.5)
-    ax0.set_xlim((0, len(running_es)))
-    ax0.grid(True)
-    ax0.set_xticklabels([])
-    ax0.set_ylabel('Enrichment score (ES)')
-    ax0.set_title('Enrichment plot: %s' % (title))
-    # membership in sample set
-    ax1 = fig.add_subplot(gs[1])
-    ax1.vlines(hit_indexes, ymin=0, ymax=1, lw=0.25, 
-               color='black', label='Hits')
-    ax1.set_xlim((0, len(running_es)))
-    ax1.set_ylim((0, 1))
-    ax1.set_xticks([])
-    ax1.set_yticks([])
-    ax1.set_xticklabels([])
-    ax1.set_yticklabels([])
-    ax1.set_ylabel('Set')
-    # weights
-    ax2 = fig.add_subplot(gs[2])
-    ax2.plot(weights_miss, color='blue')
-    ax2.plot(weights_hit, color='red')
-    #ax2.plot(weights_hit, color='red')
-    ax2.set_xlim((0, len(running_es)))
-    ax2.set_xlabel('Samples')
-    ax2.set_ylabel('Weights')
-    # draw
-    fig.tight_layout()
-    return fig
+# def plot_enrichment(running_es, rank_at_max, hit_indexes, weights_miss, 
+#                     weights_hit, es, null_es_mean, es_null_bins, 
+#                     null_es_val_hist, title, plot_conf_int=True, conf_int=0.95, 
+#                     fig=None):
+#     if fig is None:
+#         fig = plt.Figure()
+#     else:
+#         fig.clf()
+#     gs = gridspec.GridSpec(3, 1, height_ratios=[2,1,1])
+#     # running enrichment score
+#     ax0 = fig.add_subplot(gs[0])
+#     x = np.arange(len(running_es))
+#     y = running_es
+#     ax0.plot(x, y, lw=2, color='blue', label='Enrichment profile')
+#     ax0.axhline(y=0, color='gray')
+#     ax0.axvline(x=rank_at_max, lw=1, linestyle='--', color='black')
+#     # confidence interval
+#     if plot_conf_int:
+#         if es < 0:
+#             inds = (es_null_bins <= 0).nonzero()[0]
+#             left, right = -1.0, 0.0
+#         else:
+#             inds = (es_null_bins >= 0).nonzero()[0]
+#             left, right = 0.0, 1.0
+#         null_es_val_hist = np.array(null_es_val_hist, dtype=np.float)
+#         bins = es_null_bins[inds]
+#         hist = null_es_val_hist[inds[:-1]]
+#         ci_lower = hist_quantile(hist, bins, 1.0-conf_int, left, right)                
+#         ci_upper = hist_quantile(hist, bins, conf_int, left, right)
+#         lower_bound = np.repeat(ci_lower, len(x))
+#         upper_bound = np.repeat(ci_upper, len(x))
+#         ax0.axhline(y=null_es_mean, lw=2, color='red', ls=':')
+#         ax0.fill_between(x, lower_bound, upper_bound,
+#                          lw=0, facecolor='yellow', alpha=0.5,
+#                          label='%.2f CI' % (100. * conf_int))
+#         # here we use the where argument to only fill the region 
+#         # where the ES is above the confidence interval boundary
+#         if es < 0:
+#             ax0.fill_between(x, y, lower_bound, where=y<lower_bound, 
+#                              lw=0, facecolor='blue', alpha=0.5)
+#         else:
+#             ax0.fill_between(x, upper_bound, y, where=y>upper_bound, 
+#                              lw=0, facecolor='blue', alpha=0.5)
+#     ax0.set_xlim((0, len(running_es)))
+#     ax0.grid(True)
+#     ax0.set_xticklabels([])
+#     ax0.set_ylabel('Enrichment score (ES)')
+#     ax0.set_title('Enrichment plot: %s' % (title))
+#     # membership in sample set
+#     ax1 = fig.add_subplot(gs[1])
+#     ax1.vlines(hit_indexes, ymin=0, ymax=1, lw=0.25, 
+#                color='black', label='Hits')
+#     ax1.set_xlim((0, len(running_es)))
+#     ax1.set_ylim((0, 1))
+#     ax1.set_xticks([])
+#     ax1.set_yticks([])
+#     ax1.set_xticklabels([])
+#     ax1.set_yticklabels([])
+#     ax1.set_ylabel('Set')
+#     # weights
+#     ax2 = fig.add_subplot(gs[2])
+#     ax2.plot(weights_miss, color='blue')
+#     ax2.plot(weights_hit, color='red')
+#     #ax2.plot(weights_hit, color='red')
+#     ax2.set_xlim((0, len(running_es)))
+#     ax2.set_xlabel('Samples')
+#     ax2.set_ylabel('Weights')
+#     # draw
+#     fig.tight_layout()
+#     return fig
 
 def plot_null_distribution(es, es_null_bins, null_es_hist, 
                            fig=None):
@@ -346,13 +350,14 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
     returns dict containing files written
     '''    
     d = {}
-    if reportconfig.create_plots:        
+    if reportconfig.create_plots:
         # enrichment plot
-        fig = plot_enrichment2(result, sseadata, 
-                               title=sample_set.name, 
-                               plot_conf_int=reportconfig.plot_conf_int, 
-                               conf_int=reportconfig.conf_int,
-                               fig=global_fig)
+        title = 'Enrichment plot: %s vs. %s' % (rowmeta.name, sample_set.name)
+        fig = plot_enrichment(result, sseadata, 
+                              title=title, 
+                              plot_conf_int=reportconfig.plot_conf_int, 
+                              conf_int=reportconfig.conf_int,
+                              fig=global_fig)
         eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
         eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
@@ -370,7 +375,6 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
                   'nplot_png': nplot_png})
         d.update({'eplot_pdf': eplot_pdf,
                   'nplot_pdf': nplot_pdf})
-
     # write tab-delimited details file
     details_rows = sseadata.get_details_table(colmeta)
     details_tsv = '%s.%s.tsv' % (rowmeta.name, sample_set.name)
@@ -543,7 +547,7 @@ def report(config):
     if config.create_html:
         web_dir = os.path.join(config.output_dir, 'web')
         if not os.path.exists(web_dir):
-            logging.info("Installing web files")
+            logging.debug("Installing web files")
             shutil.copytree(SRC_WEB_PATH, web_dir)
     # link to input files
     row_metadata_json_file = os.path.join(config.input_dir, 
@@ -563,11 +567,12 @@ def report(config):
     sample_sets = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
     runconfig = Config.parse_json(config_json_file)
     # produce detailed reports
-    logging.debug("Creating detailed reports")
     if config.num_processes > 1:
+        logging.debug("Creating detailed reports in parallel with %d processes" % (config.num_processes))
         report_parallel(filtered_results_file, row_metadata, col_metadata, 
                         sample_sets, runconfig, config)
     else:
+        logging.debug("Creating detailed reports in serial")
         report_serial(filtered_results_file, row_metadata, col_metadata, 
                       sample_sets, runconfig, config)
     # produce report
