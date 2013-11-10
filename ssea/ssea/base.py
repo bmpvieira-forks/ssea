@@ -416,9 +416,10 @@ class SampleSet(object):
             sample_ids = []
             for sample_name in fields[2:]:
                 if sample_name not in name_id_map:
-                    raise ParserError('Unrecognized sample name "%s" in '
-                                      'sample set "%s"' 
-                                      % (sample_name, name))
+                    logging.warning('Unrecognized sample name "%s" in '
+                                    'sample set "%s"' 
+                                    % (sample_name, name))
+                    continue
                 sample_ids.append(name_id_map[sample_name])
             sample_sets.append(SampleSet(id_iter.next(), name, desc, sample_ids))
         fileh.close()
@@ -429,9 +430,8 @@ class Result(object):
               'core_hits', 'core_misses', 'null_hits', 'null_misses',
               'fisher_p_value', 'odds_ratio', 't_nes', 'ss_nes', 'global_nes',
               't_fdr_q_value', 'ss_fdr_q_value', 'global_fdr_q_value',
-              'resample_es_vals', 'resample_es_ranks', 'resample_es_mean',
-              'null_es_vals', 'null_es_ranks', 'null_es_mean', 
-              'null_es_hist')
+              'resample_es_vals', 'resample_es_ranks', 'null_es_vals', 
+              'null_es_ranks', 'null_es_hist')
     
     def __init__(self):
         for x in Result.FIELDS:

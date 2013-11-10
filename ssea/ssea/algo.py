@@ -32,6 +32,7 @@ BINS_NEG = np.linspace(-1.0, 0.0, num=NUM_BINS+1)
 BINS_POS = np.linspace(0.0, 1.0, num=NUM_BINS+1)
 BIN_CENTERS_NEG = (BINS_NEG[:-1] + BINS_NEG[1:]) / 2.
 BIN_CENTERS_POS = (BINS_POS[:-1] + BINS_POS[1:]) / 2.  
+PRECISION = 4
 
 # results directories
 TMP_DIR = 'tmp'
@@ -178,19 +179,17 @@ def ssea_run(counts, size_factors, membership, rng, config):
         # create result object
         res = Result()
         res.rand_seed = rand_seed
-        res.es = es_vals[j]
+        res.es = round(es_vals[j], PRECISION)
         res.es_rank = int(es_ranks[j])
-        res.nominal_p_value = pvals[j]
-        res.t_nes = nes_vals[j]
-        res.t_fdr_q_value = fdr_q_values[j]
-        res.t_fwer_p_value = fwer_p_values[j]
+        res.nominal_p_value = round(pvals[j],PRECISION)
+        res.t_nes = round(nes_vals[j],PRECISION)
+        res.t_fdr_q_value = round(fdr_q_values[j],PRECISION)
+        res.t_fwer_p_value = round(fwer_p_values[j],PRECISION)
         # save some of the resampled es points 
-        res.resample_es_vals = resample_es_vals[:Config.MAX_ES_POINTS,j]
+        res.resample_es_vals = np.around(resample_es_vals[:Config.MAX_ES_POINTS,j],PRECISION)
         res.resample_es_ranks = resample_es_ranks[:Config.MAX_ES_POINTS,j]
-        res.resample_es_mean = resample_es_vals[:,j].mean()
-        res.null_es_vals = null_es_vals[:Config.MAX_ES_POINTS,j]
+        res.null_es_vals = np.around(null_es_vals[:Config.MAX_ES_POINTS,j], PRECISION)
         res.null_es_ranks = null_es_ranks[:Config.MAX_ES_POINTS,j]
-        res.null_es_mean = es_null_means[j]
         res.null_es_hist = np.histogram(null_es_vals[:,j], 
                                         bins=Config.NULL_ES_BINS)[0]
         # get indexes of hits in this set

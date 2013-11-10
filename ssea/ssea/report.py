@@ -26,8 +26,8 @@ from matplotlib import figure
 
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.kernel import ssea_kernel2, RandomState, power_transform
-from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile, quantile_sorted
+from ssea.kernel import ssea_kernel2, RandomState
+from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile
 from countdata import BigCountMatrix
 
 # setup path to web files
@@ -353,19 +353,6 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
                                plot_conf_int=reportconfig.plot_conf_int, 
                                conf_int=reportconfig.conf_int,
                                fig=global_fig)
-#         fig = plot_enrichment(sseadata.es_run, 
-#                               sseadata.es_rank,
-#                               sseadata.hit_indexes, 
-#                               sseadata.weights_miss,
-#                               sseadata.weights_hit,
-#                               sseadata.es,  
-#                               result.null_es_mean, 
-#                               Config.ES_NULL_BINS,
-#                               result.null_es_val_hist,
-#                               title=sample_set.name, 
-#                               plot_conf_int=reportconfig.plot_conf_int, 
-#                               conf_int=reportconfig.conf_int,
-#                               fig=global_fig)
         eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
         eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
@@ -407,24 +394,6 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
         d['html'] = details_html
     return d
 
-def create_html_report(input_file, output_file, row_metadata, sample_sets, 
-                       runconfig):
-    def _result_parser(filename):
-        with open(filename, 'r') as fp:
-            for line in fp:
-                result = Result.from_json(line.strip())
-                rowmeta = row_metadata[result.t_id]
-                sample_set = sample_sets[result.ss_id]
-                result.sample_set_name = sample_set.name
-                result.sample_set_desc = sample_set.desc
-                result.sample_set_size = len(sample_set.sample_ids)
-                result.name = rowmeta.name
-                yield result
-    t = env.get_template('report.html')
-    with open(output_file, 'w') as fp:
-        print >>fp, t.render(name=runconfig.name,
-                             results=_result_parser(input_file))
-
 def parse_and_filter_results(filename, thresholds):
     with gzip.open(filename, 'rb') as fin:
         for line in fin:
@@ -451,64 +420,38 @@ def _producer_process(input_queue, filename, config):
 
 def _worker_process(input_queue, output_queue, sample_sets, row_metadata, 
                     col_metadata, runconfig, config):
-    # open weight matrix memmap file
-    weight_matrix_file = os.path.join(config.input_dir, 
-                                      Config.WEIGHT_MATRIX_FILE)
-    shape = (len(row_metadata),len(col_metadata))
-    weight_matrix = np.memmap(weight_matrix_file, 
-                              dtype=Config.MEMMAP_DTYPE, 
-                              mode='r', 
-                              shape=shape)
+    # open data matrix
+    bm = BigCountMatrix.open(runconfig.matrix_dir)
     # process results
     while True:
         result = input_queue.get()
         if result is None:
             break
-        # process result
-        weights = np.array(weight_matrix[result.t_id,:], dtype=np.float)
+        # read from memmap
+        counts = np.array(bm.counts[result.t_id,:], dtype=np.float)
         # remove 'nan' values        
-        sample_ids = np.isfinite(weights).nonzero()[0]
-        weights = weights[sample_ids]
+        sample_ids = np.isfinite(counts).nonzero()[0]
+        counts = counts[sample_ids]
+        size_factors = bm.size_factors[sample_ids]
         # get sample set
         sample_set = sample_sets[result.ss_id]
-        d = create_detailed_report(result, sample_ids, weights,
-                                   row_metadata[result.t_id], 
-                                   col_metadata,
-                                   sample_set,
-                                   runconfig,
-                                   config)
+        # rerun ssea
+        sseadata = ssea_rerun(sample_ids, counts, size_factors, sample_set, 
+                              result.rand_seed, runconfig)
+        d = create_detailed_report(result, sseadata, 
+                                   row_metadata[result.t_id], col_metadata, 
+                                   sample_set, config)
         # update results with location of plot files
-        result.files = d                
+        result.files = d
+        # send result back
         output_queue.put(result)
-    del weight_matrix
+    bm.close()
     # send done signal
     output_queue.put(None)
     logging.debug("Worker finished")
 
-def report_parallel(config):
-    # create output dir
-    if not os.path.exists(config.output_dir):
-        logging.debug("Creating output dir '%s'" % (config.output_dir))
-        os.makedirs(config.output_dir)
-    # create directory for static web files (CSS, javascript, etc)
-    if config.create_html:
-        web_dir = os.path.join(config.output_dir, 'web')
-        if not os.path.exists(web_dir):
-            logging.debug("Installing web files")
-            shutil.copytree(SRC_WEB_PATH, web_dir)
-    # load input files
-    row_metadata_json_file = os.path.join(config.input_dir, 
-                                          Config.METADATA_JSON_FILE)
-    row_metadata = list(Metadata.parse_json(row_metadata_json_file))
-    col_metadata_json_file = os.path.join(config.input_dir, 
-                                          Config.SAMPLES_JSON_FILE)
-    col_metadata = list(Metadata.parse_json(col_metadata_json_file))
-    sample_sets_json_file = os.path.join(config.input_dir,
-                                         Config.SAMPLE_SETS_JSON_FILE)
-    sample_sets = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
-    config_json_file = os.path.join(config.input_dir, 
-                                    Config.CONFIG_JSON_FILE)
-    runconfig = Config.parse_json(config_json_file)
+def report_parallel(output_file, row_metadata, col_metadata, 
+                    sample_sets, runconfig, config):
     # create multiprocessing queues for passing data
     input_queue = Queue(maxsize=config.num_processes*3)
     output_queue = Queue(maxsize=config.num_processes*3)    
@@ -528,8 +471,7 @@ def report_parallel(config):
         procs.append(p)
     # get results from consumers
     num_alive = config.num_processes
-    filtered_results_file = os.path.join(config.output_dir, 'filtered_results.json')
-    with open(filtered_results_file, 'w') as fout:
+    with open(output_file, 'w') as fout:
         while num_alive > 0:
             result = output_queue.get()
             if result is None:
@@ -544,45 +486,12 @@ def report_parallel(config):
     # wait for consumers to finish
     for p in procs:
         p.join()
-    # produce report
-    if config.create_html:
-        logging.debug("Writing HTML report")
-        html_file = os.path.join(config.output_dir, 'filtered_results.html')
-        create_html_report(filtered_results_file, html_file,
-                           row_metadata, sample_sets, runconfig)
-    logging.debug("Done.")
 
-def report(config):
-    # create output dir
-    if not os.path.exists(config.output_dir):
-        logging.debug("Creating output dir '%s'" % (config.output_dir))
-        os.makedirs(config.output_dir)
-    # create directory for static web files (CSS, javascript, etc)
-    if config.create_html:
-        web_dir = os.path.join(config.output_dir, 'web')
-        if not os.path.exists(web_dir):
-            logging.info("Installing web files")
-            shutil.copytree(SRC_WEB_PATH, web_dir)
-    # link to input files
-    row_metadata_json_file = os.path.join(config.input_dir, 
-                                          Config.METADATA_JSON_FILE)
-    col_metadata_json_file = os.path.join(config.input_dir, 
-                                          Config.SAMPLES_JSON_FILE)
-    sample_sets_json_file = os.path.join(config.input_dir,
-                                         Config.SAMPLE_SETS_JSON_FILE)
-    config_json_file = os.path.join(config.input_dir, 
-                                    Config.CONFIG_JSON_FILE)
-    # load input files
-    row_metadata = list(Metadata.parse_json(row_metadata_json_file))
-    col_metadata = list(Metadata.parse_json(col_metadata_json_file))
-    sample_sets = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
-    runconfig = Config.parse_json(config_json_file)
+def report_serial(output_file, row_metadata, col_metadata, sample_sets, 
+                  runconfig, config):
     # open data matrix
     bm = BigCountMatrix.open(runconfig.matrix_dir)
-    # write filtered results to output file
-    filtered_results_file = os.path.join(config.output_dir, 
-                                         'filtered_results.json')
-    fout = open(filtered_results_file, 'w')
+    fout = open(output_file, 'w')
     # parse report json    
     logging.info("Processing results")
     json_file = os.path.join(config.input_dir, Config.RESULTS_JSON_FILE)
@@ -606,6 +515,61 @@ def report(config):
         # write result to tab-delimited text
         print >>fout, result.to_json()
     fout.close()
+
+def create_html_report(input_file, output_file, row_metadata, sample_sets, 
+                       runconfig):
+    def _result_parser(filename):
+        with open(filename, 'r') as fp:
+            for line in fp:
+                result = Result.from_json(line.strip())
+                rowmeta = row_metadata[result.t_id]
+                sample_set = sample_sets[result.ss_id]
+                result.sample_set_name = sample_set.name
+                result.sample_set_desc = sample_set.desc
+                result.sample_set_size = len(sample_set.sample_ids)
+                result.name = rowmeta.name
+                yield result
+    t = env.get_template('report.html')
+    with open(output_file, 'w') as fp:
+        print >>fp, t.render(name=runconfig.name,
+                             results=_result_parser(input_file))
+
+def report(config):
+    # create output dir
+    if not os.path.exists(config.output_dir):
+        logging.debug("Creating output dir '%s'" % (config.output_dir))
+        os.makedirs(config.output_dir)
+    # create directory for static web files (CSS, javascript, etc)
+    if config.create_html:
+        web_dir = os.path.join(config.output_dir, 'web')
+        if not os.path.exists(web_dir):
+            logging.info("Installing web files")
+            shutil.copytree(SRC_WEB_PATH, web_dir)
+    # link to input files
+    row_metadata_json_file = os.path.join(config.input_dir, 
+                                          Config.METADATA_JSON_FILE)
+    col_metadata_json_file = os.path.join(config.input_dir, 
+                                          Config.SAMPLES_JSON_FILE)
+    sample_sets_json_file = os.path.join(config.input_dir,
+                                         Config.SAMPLE_SETS_JSON_FILE)
+    config_json_file = os.path.join(config.input_dir, 
+                                    Config.CONFIG_JSON_FILE)
+    # write filtered results to output file
+    filtered_results_file = os.path.join(config.output_dir, 
+                                         'filtered_results.json')
+    # load input files
+    row_metadata = list(Metadata.parse_json(row_metadata_json_file))
+    col_metadata = list(Metadata.parse_json(col_metadata_json_file))
+    sample_sets = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
+    runconfig = Config.parse_json(config_json_file)
+    # produce detailed reports
+    logging.debug("Creating detailed reports")
+    if config.num_processes > 1:
+        report_parallel(filtered_results_file, row_metadata, col_metadata, 
+                        sample_sets, runconfig, config)
+    else:
+        report_serial(filtered_results_file, row_metadata, col_metadata, 
+                      sample_sets, runconfig, config)
     # produce report
     if config.create_html:
         logging.debug("Writing HTML report")

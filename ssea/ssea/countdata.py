@@ -5,8 +5,8 @@ Created on Nov 6, 2013
 '''
 import os
 import numpy as np
+import logging
 
-#FLOAT_DTYPE = np.float
 FLOAT_DTYPE = np.float32
 
 class CountMatrix(object):
@@ -181,9 +181,9 @@ class BigCountMatrix(CountMatrix):
                 geomeans[i] = np.exp(np.log(a[valid]).mean())
             else:
                 geomeans[i] = np.nan
-            #if i % 10000 == 0:
-            #    logging.debug("%d %d" % (i, np.isfinite(geomeans[:i]).sum()))
-        #print 'found', np.isfinite(geomeans).sum()
+            if i % 10000 == 0:
+                logging.debug("%d %d" % (i, np.isfinite(geomeans[:i]).sum()))
+        print 'found', np.isfinite(geomeans).sum()
         # ignore rows of zero or nan
         valid_geomeans = np.logical_and((geomeans > 0), np.isfinite(geomeans))
         size_factors = np.empty(ncols, dtype=np.float)
@@ -195,7 +195,7 @@ class BigCountMatrix(CountMatrix):
                 size_factors[j] = np.median(a[valid] / geomeans[valid])
             else:
                 size_factors[j] = np.nan
-            #print j, self.library_ids[j], size_factors[j], valid.sum(), a[valid].sum()
+            print j, self.library_ids[j], size_factors[j], valid.sum(), a[valid].sum()
         return size_factors
 
     def estimate_size_factors(self, method='deseq'):
