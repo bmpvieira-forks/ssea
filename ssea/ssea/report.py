@@ -355,8 +355,6 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
         title = 'Enrichment plot: %s vs. %s' % (rowmeta.name, sample_set.name)
         fig = plot_enrichment(result, sseadata, 
                               title=title, 
-                              plot_conf_int=reportconfig.plot_conf_int, 
-                              conf_int=reportconfig.conf_int,
                               fig=global_fig)
         eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
         eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)

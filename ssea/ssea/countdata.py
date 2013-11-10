@@ -195,7 +195,7 @@ class BigCountMatrix(CountMatrix):
                 size_factors[j] = np.median(a[valid] / geomeans[valid])
             else:
                 size_factors[j] = np.nan
-            print j, self.library_ids[j], size_factors[j], valid.sum(), a[valid].sum()
+            print j, self.colnames[j], size_factors[j], valid.sum(), a[valid].sum()
         return size_factors
 
     def estimate_size_factors(self, method='deseq'):

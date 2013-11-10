@@ -34,6 +34,26 @@ BIN_CENTERS_NEG = (BINS_NEG[:-1] + BINS_NEG[1:]) / 2.
 BIN_CENTERS_POS = (BINS_POS[:-1] + BINS_POS[1:]) / 2.  
 PRECISION = 4
 
+NUM_NES_BINS = 10000
+NES_BINS_POS = np.logspace(-1,2,num=NUM_NES_BINS+1,base=10)
+NES_BINS_NEG = -1.0 * np.logspace(-1,2,num=NUM_NES_BINS+1,base=10)[::-1]
+NES_BIN_CENTERS_NEG = (NES_BINS_NEG[:-1] + NES_BINS_NEG[1:]) / 2.
+NES_BIN_CENTERS_POS = (NES_BINS_POS[:-1] + NES_BINS_POS[1:]) / 2.  
+NES_NEG_MIN = NES_BINS_NEG[0]
+NES_NEG_MAX = NES_BINS_NEG[-1]
+NES_POS_MIN = NES_BINS_POS[0]
+NES_POS_MAX = NES_BINS_POS[-1]
+
+def init_hists(nsets):
+    return {'null_es_pos': np.zeros((nsets,NUM_BINS), dtype=np.float),
+            'null_es_neg': np.zeros((nsets,NUM_BINS), dtype=np.float),
+            'obs_es_pos': np.zeros((nsets,NUM_BINS), dtype=np.float),
+            'obs_es_neg': np.zeros((nsets,NUM_BINS), dtype=np.float),
+            'null_nes_pos': np.zeros(NUM_NES_BINS, dtype=np.float),
+            'null_nes_neg': np.zeros(NUM_NES_BINS, dtype=np.float),
+            'obs_nes_pos': np.zeros(NUM_NES_BINS, dtype=np.float),
+            'obs_nes_neg': np.zeros(NUM_NES_BINS, dtype=np.float)}
+
 # results directories
 TMP_DIR = 'tmp'
 TMP_JSON_FILE = 'tmp.json.gz'
@@ -96,61 +116,64 @@ def ssea_run(counts, size_factors, membership, rng, config):
         null_es_vals[i,:] = k.es_vals
         null_es_ranks[i,:] = k.es_ranks
     # default containers for results
+    null_es_means = np.empty(membership.shape[1], dtype=np.float)
     nes_vals = np.empty(membership.shape[1], dtype=np.float)
+    null_nes_vals = np.empty(shape, dtype=np.float)
     pvals = np.empty(membership.shape[1], dtype=np.float)
     fdr_q_values = np.empty(membership.shape[1], dtype=np.float)
     fwer_p_values = np.empty(membership.shape[1], dtype=np.float)
-    es_null_means = np.empty(membership.shape[1], dtype=np.float)
     # separate the positive and negative sides of the null distribution
     # based on the observed enrichment scores
     es_neg_inds = (es_vals < 0).nonzero()[0]
     if len(es_neg_inds) > 0:
         # mask positive scores 
-        es_null_neg = np.ma.masked_greater(null_es_vals[:,es_neg_inds], 0)
+        null_es_neg = np.ma.masked_greater_equal(null_es_vals[:,es_neg_inds], 0)
         # Adjust for variation in gene set size. Normalize ES(S,null)
         # and the observed ES(S), separately rescaling the positive and
         # negative scores by dividing by the mean of the ES(S,null) to
         # yield normalized scores NES(S,null)
-        es_null_neg_means = es_null_neg.mean(axis=0)
-        es_null_means[es_neg_inds] = es_null_neg_means
-        nes_null_neg = es_null_neg / np.fabs(es_null_neg_means)
-        nes_null_neg_count = nes_null_neg.count()
+        null_es_neg_means = null_es_neg.mean(axis=0)
+        null_es_means[es_neg_inds] = null_es_neg_means
+        null_nes_neg = null_es_neg / np.fabs(null_es_neg_means)
+        null_nes_vals[:,es_neg_inds] = null_nes_neg
+        null_nes_neg_count = null_nes_neg.count()
         # To compute FWER create a histogram of the maximum NES(S,null) 
         # over all S for each of the permutations by using the positive 
         # or negative values corresponding to the sign of the observed NES(S). 
-        nes_null_min = nes_null_neg.min(axis=1).compressed()
+        null_nes_min = null_nes_neg.min(axis=1).compressed()
         # Normalize the observed ES(S) by rescaling by the mean of
         # the ES(S,null) separately for positive and negative ES(S)
         nes_obs_neg = (np.ma.MaskedArray(es_vals[es_neg_inds]) / 
-                       np.fabs(es_null_neg_means))
+                       np.fabs(null_es_neg_means))
         nes_obs_neg_count = nes_obs_neg.count()
         nes_vals[es_neg_inds] = nes_obs_neg
         # estimate nominal p value for S from ES(S,null) by using the
         # positive or negative portion of the distribution corresponding
         # to the sign of the observed ES(S)
-        pneg = 1.0 + (es_null_neg <= es_vals[es_neg_inds]).sum(axis=0)
-        pneg = pneg / (1.0 + es_null_neg.count(axis=0).astype(float))
+        pneg = 1.0 + (null_es_neg <= es_vals[es_neg_inds]).sum(axis=0)
+        pneg = pneg / (1.0 + null_es_neg.count(axis=0).astype(float))
         pvals[es_neg_inds] = pneg
     # do the same for the positive enrichment scores (see above for
     # detailed comments
     es_pos_inds = (es_vals >= 0).nonzero()[0]
     if len(es_pos_inds) > 0:
         # mask negative scores 
-        es_null_pos = np.ma.masked_less(null_es_vals[:,es_pos_inds], 0)
+        null_es_pos = np.ma.masked_less_equal(null_es_vals[:,es_pos_inds], 0)
         # normalize
-        es_null_pos_means = es_null_pos.mean(axis=0)
-        es_null_means[es_pos_inds] = es_null_pos_means        
-        nes_null_pos = es_null_pos / np.fabs(es_null_pos_means)
-        nes_null_pos_count = nes_null_pos.count()
+        null_es_pos_means = null_es_pos.mean(axis=0)
+        null_es_means[es_pos_inds] = null_es_pos_means        
+        null_nes_pos = null_es_pos / np.fabs(null_es_pos_means)
+        null_nes_vals[:,es_pos_inds] = null_nes_pos
+        null_nes_pos_count = null_nes_pos.count()
         # store max NES for FWER calculation
-        nes_null_max = nes_null_pos.max(axis=1).compressed()
+        null_nes_max = null_nes_pos.max(axis=1).compressed()
         nes_obs_pos = (np.ma.MaskedArray(es_vals[es_pos_inds]) / 
-                       np.fabs(es_null_pos_means))
+                       np.fabs(null_es_pos_means))
         nes_obs_pos_count = nes_obs_pos.count()
         nes_vals[es_pos_inds] = nes_obs_pos
         # estimate p values
-        ppos = 1.0 + (es_null_pos >= es_vals[es_pos_inds]).sum(axis=0)
-        ppos = ppos / (1.0 + es_null_pos.count(axis=0).astype(np.float))
+        ppos = 1.0 + (null_es_pos >= es_vals[es_pos_inds]).sum(axis=0)
+        ppos = ppos / (1.0 + null_es_pos.count(axis=0).astype(np.float))
         pvals[es_pos_inds] = ppos
     # Control for multiple hypothesis testing and summarize results
     for j in xrange(membership.shape[1]):
@@ -165,13 +188,13 @@ def ssea_run(counts, size_factors, membership, rng, config):
         # respectively 
         nes = nes_vals[j]
         if np.sign(es_vals[j]) < 0:
-            n = (1+(nes_null_neg <= nes).sum()) / (1+float(nes_null_neg_count))
+            n = (1+(null_nes_neg <= nes).sum()) / (1+float(null_nes_neg_count))
             d = (nes_obs_neg <= nes).sum() / float(nes_obs_neg_count)
-            fwerp = (1+(nes_null_min <= nes).sum()) / (1+float(len(nes_null_min)))
+            fwerp = (1+(null_nes_min <= nes).sum()) / (1+float(len(null_nes_min)))
         else:
-            n = (1+(nes_null_pos >= nes).sum()) / (1+float(nes_null_pos_count))
+            n = (1+(null_nes_pos >= nes).sum()) / (1+float(null_nes_pos_count))
             d = (nes_obs_pos >= nes).sum() / float(nes_obs_pos_count)
-            fwerp = (1+(nes_null_max >= nes).sum()) / (1+float(len(nes_null_max)))
+            fwerp = (1+(null_nes_max >= nes).sum()) / (1+float(len(null_nes_max)))
         fdr_q_values[j] = n / d
         fwer_p_values[j] = fwerp
     # setup result objects    
@@ -227,7 +250,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
         res.null_misses = int(null_misses)
         res.fisher_p_value = fisher_p_value
         res.odds_ratio = odds_ratio
-        yield j, res, null_es_vals[:,j]
+        # return null distributions for global fdr calculation
+        yield j, res, null_es_vals[:,j], null_nes_vals[:,j]
 
 def ssea_serial(matrix_dir, shape, sample_sets, config, 
                 output_json_file, output_hist_file, 
@@ -253,10 +277,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
         endrow = bm.shape[0]
     assert startrow < endrow
     # setup global ES histograms
-    es_hists = {'null_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
-                'null_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
-                'obs_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
-                'obs_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)}
+    hists = init_hists(len(sample_sets))
     # setup report file
     outfileh = gzip.open(output_json_file, 'wb')    
     for i in xrange(startrow, endrow):
@@ -273,8 +294,8 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
         for j,sample_set in enumerate(sample_sets):
             membership[:,j] = sample_set.get_array(sample_ids)
         # run ssea
-        for j,res,es_null in ssea_run(counts, size_factors, membership, 
-                                      rng, config):
+        for j,res,null_es,null_nes in ssea_run(counts, size_factors, 
+                                               membership, rng, config):
             # save row and column id
             res.t_id = i
             res.ss_id = j
@@ -282,15 +303,21 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
             print >>outfileh, res.to_json()
             # update ES histograms
             if res.es <= 0:
-                es_hists['null_neg'][res.ss_id] += np.histogram(es_null, BINS_NEG)[0]
-                es_hists['obs_neg'][res.ss_id] += np.histogram(res.es, BINS_NEG)[0]
+                hists['null_es_neg'][res.ss_id] += np.histogram(null_es, BINS_NEG)[0]
+                hists['obs_es_neg'][res.ss_id] += np.histogram(res.es, BINS_NEG)[0]                
+                nes = np.clip(res.t_nes, NES_NEG_MIN, NES_NEG_MAX)
+                hists['null_nes_neg'] += np.histogram(null_nes.clip(NES_NEG_MIN,NES_NEG_MAX), NES_BINS_NEG)[0]
+                hists['obs_nes_neg'] += np.histogram(nes, NES_BINS_NEG)[0]                
             if res.es >= 0:
-                es_hists['null_pos'][res.ss_id] += np.histogram(es_null, BINS_POS)[0]        
-                es_hists['obs_pos'][res.ss_id] += np.histogram(res.es, BINS_POS)[0]
+                hists['null_es_pos'][res.ss_id] += np.histogram(null_es, BINS_POS)[0]        
+                hists['obs_es_pos'][res.ss_id] += np.histogram(res.es, BINS_POS)[0]
+                nes = np.clip(res.t_nes, NES_POS_MIN, NES_POS_MAX)                
+                hists['null_nes_pos'] += np.histogram(null_nes.clip(NES_POS_MIN,NES_POS_MAX), NES_BINS_POS)[0]
+                hists['obs_nes_pos'] += np.histogram(nes, NES_BINS_POS)[0]
     # close report file
     outfileh.close()
     # save histograms to a file
-    np.savez(output_hist_file, **es_hists)
+    np.savez(output_hist_file, **hists)
     # cleanup
     bm.close()
 
@@ -330,50 +357,49 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
     logging.info("Merging %d worker results" % (len(procs)))
     fout = open(output_json_file, 'wb')
     # setup global ES histograms
-    es_hists = {'null_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
-                'null_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
-                'obs_pos': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float),
-                'obs_neg': np.zeros((len(sample_sets),NUM_BINS), dtype=np.float)}
+    hists = init_hists(len(sample_sets))
     for i in xrange(len(procs)):        
         # merge json files
         with open(worker_json_files[i], 'rb') as fin:
             shutil.copyfileobj(fin, fout)      
         # aggregate numpy arrays
         npzfile = np.load(worker_hist_files[i])
-        es_hists['null_pos'] += npzfile['null_pos']
-        es_hists['null_neg'] += npzfile['null_neg']
-        es_hists['obs_pos'] += npzfile['obs_pos']
-        es_hists['obs_neg'] += npzfile['obs_neg']
+        for k in hists.iterkeys():
+            hists[k] += npzfile[k]
         npzfile.close()
     fout.close() 
-    np.savez(output_hist_file, **es_hists)
+    np.savez(output_hist_file, **hists)
 
-def compute_global_stats(es_hists_file, input_json_file, output_json_file):
+def compute_global_stats(hists_file, input_json_file, output_json_file):
     # read es histograms
-    npzfile = np.load(es_hists_file)
-    hists_null_pos = npzfile['null_pos']
-    hists_null_neg = npzfile['null_neg']
-    hists_obs_pos = npzfile['obs_pos']
-    hists_obs_neg = npzfile['obs_neg']
+    npzfile = np.load(hists_file)
+    hists_null_es_pos = npzfile['null_es_pos']
+    hists_null_es_neg = npzfile['null_es_neg']
+    hists_obs_es_pos = npzfile['obs_es_pos']
+    hists_obs_es_neg = npzfile['obs_es_neg']
+    hists_null_nes_pos = npzfile['null_nes_pos']
+    hists_null_nes_neg = npzfile['null_nes_neg']
+    hists_obs_nes_pos = npzfile['obs_nes_pos']
+    hists_obs_nes_neg = npzfile['obs_nes_neg']
     npzfile.close()
     # compute per-sample-set means
-    ss_null_pos_counts = hists_null_pos.sum(axis=1)
-    ss_null_neg_counts = hists_null_neg.sum(axis=1)
-    ss_obs_pos_counts = hists_obs_pos.sum(axis=1)
-    ss_obs_neg_counts = hists_obs_neg.sum(axis=1)
-    ss_null_neg_means = np.fabs((hists_null_neg * BIN_CENTERS_NEG).sum(axis=1) / 
-                                ss_null_neg_counts.clip(1.0))
-    ss_null_pos_means = np.fabs((hists_null_pos * BIN_CENTERS_POS).sum(axis=1) / 
-                                ss_null_pos_counts.clip(1.0))
-    # compute global means
-    g_null_pos = hists_null_pos.sum(axis=0)
-    g_null_neg = hists_null_neg.sum(axis=0)
-    g_obs_pos = hists_obs_pos.sum(axis=0)
-    g_obs_neg = hists_obs_neg.sum(axis=0)
-    g_null_neg_mean = np.fabs((g_null_pos * BIN_CENTERS_NEG).sum() / 
-                              g_null_neg.sum().clip(1.0))    
-    g_null_pos_mean = np.fabs((g_null_pos * BIN_CENTERS_POS).sum() / 
-                              g_null_pos.sum().clip(1.0))
+    null_es_pos_counts = hists_null_es_pos.sum(axis=1)
+    null_es_neg_counts = hists_null_es_neg.sum(axis=1)
+    obs_es_pos_counts = hists_obs_es_pos.sum(axis=1)
+    obs_es_neg_counts = hists_obs_es_neg.sum(axis=1)
+    null_es_neg_means = np.fabs((hists_null_es_neg * BIN_CENTERS_NEG).sum(axis=1) / 
+                                null_es_neg_counts.clip(1.0))
+    null_es_pos_means = np.fabs((hists_null_es_pos * BIN_CENTERS_POS).sum(axis=1) / 
+                                null_es_pos_counts.clip(1.0))
+    # compute global means    
+    null_nes_pos_counts = hists_null_nes_pos.sum()
+    null_nes_neg_counts = hists_null_nes_neg.sum()
+    obs_nes_pos_counts = hists_obs_nes_pos.sum()
+    obs_nes_neg_counts = hists_obs_nes_neg.sum()
+    null_nes_neg_mean = np.fabs((hists_null_nes_neg * NES_BIN_CENTERS_NEG).sum() / 
+                                null_nes_neg_counts)
+    null_nes_pos_mean = np.fabs((hists_null_nes_pos * NES_BIN_CENTERS_POS).sum() / 
+                                null_nes_pos_counts)
     # parse report json and write new values
     fin = gzip.open(input_json_file, 'rb')
     fout = gzip.open(output_json_file, 'wb')
@@ -383,35 +409,40 @@ def compute_global_stats(es_hists_file, input_json_file, output_json_file):
         # get relevant columns
         i = res.ss_id
         es = res.es
+        nes = res.t_nes
         # compute sample set and global NES and FDR q-values
         if es < 0:
-            if ss_null_neg_means[i] == 0:
+            if null_es_neg_means[i] == 0:
                 ss_nes = 0.0
             else:
-                ss_nes = es / ss_null_neg_means[i]
+                ss_nes = es / null_es_neg_means[i]
             es_bin = np.digitize((es,), BINS_NEG)
-            ss_n = (1+hists_null_neg[i,:es_bin].sum()) / (1+float(ss_null_neg_counts[i]))
-            ss_d = hists_obs_neg[i,:es_bin].sum() / float(ss_obs_neg_counts[i])
-            if g_null_neg_mean == 0:
+            ss_n = (1+hists_null_es_neg[i,:es_bin].sum()) / (1+float(null_es_neg_counts[i]))
+            ss_d = hists_obs_es_neg[i,:es_bin].sum() / float(obs_es_neg_counts[i])
+            # NES uses different bins
+            if null_nes_neg_mean == 0:
                 global_nes = 0.0
             else:
-                global_nes = es / g_null_neg_mean
-            global_n = (1+g_null_neg[:es_bin].sum()) / (1+float(g_null_neg.sum()))
-            global_d = g_obs_neg[:es_bin].sum() / float(g_obs_neg.sum())
+                global_nes = nes / null_nes_neg_mean
+            nes_bin = np.digitize((nes,), NES_BINS_NEG)
+            global_n = (1+hists_null_nes_neg[:nes_bin].sum()) / (1+float(null_nes_neg_counts))
+            global_d = hists_obs_nes_neg[:nes_bin].sum() / float(obs_nes_neg_counts)
         else:
-            if ss_null_pos_means[i] == 0:
+            if null_es_pos_means[i] == 0:
                 ss_nes = 0.0
             else:
-                ss_nes = es / ss_null_pos_means[i]            
+                ss_nes = es / null_es_pos_means[i]            
             es_bin = np.digitize((es,), BINS_POS) - 1
-            ss_n = (1+hists_null_pos[i,es_bin:].sum()) / (1+float(ss_null_pos_counts[i]))
-            ss_d = hists_obs_pos[i,es_bin:].sum() / float(ss_obs_pos_counts[i])
-            if g_null_pos_mean == 0:
+            ss_n = (1+hists_null_es_pos[i,es_bin:].sum()) / (1+float(null_es_pos_counts[i]))
+            ss_d = hists_obs_es_pos[i,es_bin:].sum() / float(obs_es_pos_counts[i])
+            # NES uses different bins
+            if null_nes_pos_mean == 0:
                 global_nes = 0.0
             else:
-                global_nes = es / g_null_pos_mean
-            global_n = (1+g_null_pos[es_bin:].sum()) / (1+float(g_null_neg.sum()))
-            global_d = g_obs_pos[es_bin:].sum() / float(g_obs_neg.sum())        
+                global_nes = nes / null_nes_pos_mean
+            nes_bin = np.digitize((nes,), NES_BINS_POS) - 1
+            global_n = (1+hists_null_nes_pos[nes_bin:].sum()) / (1+float(null_nes_pos_counts))
+            global_d = hists_obs_nes_pos[nes_bin:].sum() / float(obs_nes_pos_counts)
         ss_fdr_q_value = ss_n / ss_d
         global_fdr_q_value = global_n / global_d
         # update json dict
@@ -439,7 +470,7 @@ def ssea_main(config, sample_sets, row_metadata, col_metadata):
     # create temp directory
     tmp_dir = os.path.join(config.output_dir, TMP_DIR)
     if not os.path.exists(tmp_dir):
-        logging.debug("\tCreating tmp directory '%s'" % (tmp_dir))
+        logging.debug("Creating tmp directory '%s'" % (tmp_dir))
         os.makedirs(tmp_dir)
     # output files
     tmp_json_file = os.path.join(tmp_dir, TMP_JSON_FILE)

@@ -95,12 +95,13 @@ def normalize_counts(np.ndarray[FLOAT_t, ndim=1] counts not None,
             counts[i] = rng.lcg_poisson(&r.seed, counts[i])
         # normalize for library size
         counts[i] = counts[i] / size_factors[i]
-        # add gaussian noise
+        # add noise
         if add_noise:
+            counts[i] += rng.lcg_poisson(&r.seed, noise_loc)
             counts[i] += rng.lcg_double(&r.seed) * noise_scale
             #counts[i] += rng.lcg_normal(&r.seed, noise_loc, noise_scale)
-            if counts[i] < 0:
-                counts[i] = 0
+            #if counts[i] < 0:
+            #    counts[i] = 0
 
 @cython.boundscheck(False)
 @cython.wraparound(False)
