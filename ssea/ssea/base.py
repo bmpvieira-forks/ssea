@@ -275,9 +275,9 @@ class Metadata(object):
         with open(filename, 'r') as fp:
             for line in fp:
                 yield Metadata.from_json(line.strip())
-    
+
     @staticmethod
-    def parse_tsv(filename, id_iter=None):
+    def parse_tsv(filename, names, id_iter=None):
         '''
         parse tab-delimited file containing sample information        
         first row contains column headers
@@ -286,15 +286,20 @@ class Metadata(object):
         '''
         if id_iter is None:
             id_iter = itertools.count()
-        fileh = open(filename)
-        header_fields = fileh.next().strip().split('\t')
-        for line in fileh:
-            fields = line.strip().split('\t')
-            name = fields[0]
+        # read entire metadata file
+        metadict = {}
+        with open(filename) as fileh:
+            header_fields = fileh.next().strip().split('\t')
+            for line in fileh:
+                fields = line.strip().split('\t')
+                name = fields[0]            
+                metadict[name] = fields[1:]
+        # join with rownames
+        for name in names:
+            assert name in metadict
+            fields = metadict[name]
             metadata = dict(zip(header_fields[1:],fields[1:]))
-            yield Metadata(id_iter.next(), name, metadata)
-        fileh.close()
-        
+            yield Metadata(id_iter.next(), name, metadata)        
 
 class SampleSet(object): 
     def __init__(self, _id=None, name=None, desc=None, sample_ids=None):

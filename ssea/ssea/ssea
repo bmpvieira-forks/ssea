@@ -149,13 +149,13 @@ USAGE
     # read metadata
     if args.row_metadata_file is not None:
         logging.info("Reading row metadata")
-        row_metadata = Metadata.parse_tsv(args.row_metadata_file)
+        row_metadata = Metadata.parse_tsv(args.row_metadata_file, bm.rownames)
     else:
         id_iter = itertools.count()
         row_metadata = [Metadata(id_iter.next(), x) for x in bm.rownames]
     if args.col_metadata_file is not None:
         logging.info("Reading column metadata")
-        col_metadata = Metadata.parse_tsv(args.col_metadata_file)
+        col_metadata = Metadata.parse_tsv(args.col_metadata_file, bm.colnames)
     else:
         id_iter = itertools.count()
         col_metadata = [Metadata(id_iter.next(), x) for x in bm.colnames]

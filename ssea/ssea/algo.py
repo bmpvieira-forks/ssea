@@ -283,10 +283,9 @@ def ssea_run(counts, size_factors, membership, rng, config):
         res.fisher_p_value = fisher_p_value
         res.odds_ratio = odds_ratio
         # return null distributions for global fdr calculation
-        r = RunResult(j, res, null_es_vals[:,j], null_nes_vals[:,j],
-                      resample_es_vals[:,j], resample_nes_vals[:,j])
-        yield r
-        #yield j, res, null_es_vals[:,j], null_nes_vals[:,j], resample_es_vals[:,j], resample_nes_vals[:,j]
+        yield RunResult(j, res, 
+                        null_es_vals[:,j], null_nes_vals[:,j],
+                        resample_es_vals[:,j], resample_nes_vals[:,j])
 
 def ssea_serial(matrix_dir, shape, sample_sets, config, 
                 output_json_file, output_hist_file, 
@@ -330,14 +329,14 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
             membership[:,j] = sample_set.get_array(sample_ids)
         # run ssea
         for tup in ssea_run(counts, size_factors, membership, rng, config):
+            j = tup.sample_set_index
             # save row and column id
             result = tup.result
             result.t_id = i
-            result.ss_id = tup.sample_set_index
+            result.ss_id = j
             # convert to json
             print >>outfileh, result.to_json()
             # update ES histograms
-            j = tup.sample_set_index
             if result.es <= 0:
                 hists['null_es_neg'][j] += np.histogram(tup.null_es, ES_BINS_NEG)[0]
                 hists['obs_es_neg'][j] += np.histogram(result.es, ES_BINS_NEG)[0]      
