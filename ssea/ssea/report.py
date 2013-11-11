@@ -536,10 +536,18 @@ def create_html_report(input_file, output_file, row_metadata, sample_sets,
                 result.sample_set_desc = sample_set.desc
                 result.sample_set_size = len(sample_set.sample_ids)
                 result.name = rowmeta.name
+                result.params = rowmeta.params
                 yield result
+    # get full list of parameters in row metadata
+    allparams = set()
+    for r in row_metadata:
+        allparams.update(r.params.keys())
+    allparams = sorted(allparams)
+    # render templates
     t = env.get_template('report.html')
     with open(output_file, 'w') as fp:
         print >>fp, t.render(name=runconfig.name,
+                             params=allparams,
                              results=_result_parser(input_file))
 
 def report(config):

@@ -33,7 +33,9 @@ $(document).ready(function() {
 <th>Index</th>
 <th>Details</th>
 <th>Name</th>
-<th>Description</th>
+{% for key in params %}
+    <th>{{ key }}</th>
+{% endfor %}
 <th>Sample Set</th>
 <th>Sample Set Description</th>
 <th>Sample Set Size</th>
@@ -65,7 +67,9 @@ $(document).ready(function() {
 {% endif %}
 </td>
 <td>{{ res.name }}</td>
-<td>{{ res.name }}</td>
+{% for key in params %}
+    <td>{{ res.params[key] }}</td>
+{% endfor %}
 <td>{{ res.sample_set_name }}</td>
 <td>{{ res.sample_set_desc }}</td>
 <td>{{ res.sample_set_size }}</td>

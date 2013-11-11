@@ -289,16 +289,18 @@ class Metadata(object):
         # read entire metadata file
         metadict = {}
         with open(filename) as fileh:
-            header_fields = fileh.next().strip().split('\t')
+            header_fields = fileh.next().strip().split('\t')[1:]
             for line in fileh:
                 fields = line.strip().split('\t')
                 name = fields[0]            
                 metadict[name] = fields[1:]
-        # join with rownames
+        # join with names
         for name in names:
+            if name not in metadict:
+                logging.error("Name %s not found in metadata" % (name))
             assert name in metadict
             fields = metadict[name]
-            metadata = dict(zip(header_fields[1:],fields[1:]))
+            metadata = dict(zip(header_fields,fields))
             yield Metadata(id_iter.next(), name, metadata)        
 
 class SampleSet(object): 
