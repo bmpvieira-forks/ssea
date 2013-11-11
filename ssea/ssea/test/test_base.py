@@ -9,7 +9,7 @@ import random
 import os
 import numpy as np
 
-from ssea.base import Metadata, SampleSet, chunk, hist_quantile
+from ssea.base import Metadata, SampleSet, chunk, hist_quantile, interp
 
 def generate_random_sample_sets(N, minsize, maxsize, samples):
     sample_sets = []
@@ -36,6 +36,17 @@ class TestBase(unittest.TestCase):
         self.assertEquals(list(chunk(4,4)), [(0, 1), (1, 2), (2, 3), (3, 4)])
         self.assertEquals(list(chunk(5,4)), [(0, 2), (2, 3), (3, 4), (4, 5)])
 
+    def test_interp(self):
+        x = np.random.normal(loc=0.5, scale=0.1, size=100000)
+        bins = np.linspace(0.0, 1.0, num=51)
+        h = np.histogram(x, bins=bins)[0]        
+        fp = np.zeros(len(bins), dtype=np.float)
+        fp[1:] = h.cumsum()
+        x = np.linspace(0,1,21)
+        y = np.interp(x, bins, fp) 
+        y2 = np.array([interp(v, bins, fp) for v in x])
+        self.assertTrue(np.array_equal(y, y2))
+        
     def test_hist_quantile(self):
         # TODO: write test cases
         #hist = np.array([0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,2.0,4.0,10.0,10.0,13.0,22.0,21.0,32.0,40.0,36.0,36.0,51.0,68.0,61.0,54.0,61.0,55.0,55.0,36.0,24.0,8.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0])

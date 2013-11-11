@@ -3,47 +3,47 @@ Created on Oct 24, 2013
 
 @author: mkiyer
 '''
-import unittest
-
 import numpy as np
 import sys
 
-from ssea.kernel import ssea_kernel
-from ssea.algo import transform_weights
+from ssea.base import interp
+#from ssea.kernel import ssea_kernel
+#from ssea.algo import transform_weights
 
-class TestPerformance(unittest.TestCase):
+def interp_setup(numbins):
+    import numpy as np
+    d = np.random.normal(loc=0.5, scale=0.1, size=100000)
+    bins = np.linspace(0.0, 1.0, num=numbins)
+    h = np.histogram(d, bins=bins)[0]        
+    fp = np.zeros(len(bins), dtype=np.float)
+    fp[1:] = h.cumsum()
+    x = np.linspace(0,1,num=100000)
+    return x, bins, fp
 
-    def test1(self):
-        # setup samples
-        nsamples = 10000
-        nsets = 100
-        iterations = 2000
-        # create membership array and fill with random values
-        membership = np.empty((nsamples,nsets), dtype=np.uint8)
-        membership[:] = np.random.random_integers(0, 1, (nsamples,nsets))
-        # create random weights (use integers to create ties)
-        weights = np.empty(nsamples, dtype=np.float)
-        weights[:] = np.sort(np.random.random_integers(-10, 10, nsamples))[::-1]
-        # transform weights based on weight method
-        weight_method = 'weighted'
-        weights_miss = np.fabs(transform_weights(weights, weight_method))
-        weights_hit = np.fabs(transform_weights(weights, weight_method))
-        # run kernel
-        perm = np.arange(nsamples)
-        for i in xrange(iterations):
-            np.random.shuffle(perm)
-            print i
-            es_vals, es_run_inds, es_runs = \
-                ssea_kernel(weights, weights_miss, weights_hit, membership, perm)
+def interp_test1():
+    x, bins, fp = interp_setup(10001)
+    for v in x:
+        y = np.interp(v, bins, fp) 
+
+def interp_test2():
+    x, bins, fp = interp_setup(10001)
+    for v in x:
+        y = interp(v, bins, fp) 
 
 if __name__ == "__main__":
-    import cProfile
-    import pstats
-    profile_filename = '_profile.bin'
-    cProfile.run('unittest.main()', profile_filename)
-    statsfile = open("profile_stats.txt", "wb")
-    p = pstats.Stats(profile_filename, stream=statsfile)
-    stats = p.strip_dirs().sort_stats('cumulative')
-    stats.print_stats()
-    statsfile.close()
-    sys.exit(0)
+    import timeit
+    print 'hello'
+    print timeit.timeit('interp_test1()', setup='from __main__ import interp_test1', number=1)
+    print 'hello'
+    print timeit.timeit('interp_test2()', setup='from __main__ import interp_test2', number=1)
+
+#     import cProfile
+#     import pstats
+#     profile_filename = '_profile.bin'
+#     cProfile.run('unittest.main()', profile_filename)
+#     statsfile = open("profile_stats.txt", "wb")
+#     p = pstats.Stats(profile_filename, stream=statsfile)
+#     stats = p.strip_dirs().sort_stats('cumulative')
+#     stats.print_stats()
+#     statsfile.close()
+#     sys.exit(0)

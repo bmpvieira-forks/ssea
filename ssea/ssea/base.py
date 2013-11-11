@@ -24,6 +24,7 @@ WEIGHT_METHODS = {'unweighted': WeightMethod.UNWEIGHTED,
                   'weighted': WeightMethod.WEIGHTED,
                   'exp': WeightMethod.EXP,
                   'log': WeightMethod.LOG}
+WEIGHT_METHOD_STR = dict((v,k) for k,v in WEIGHT_METHODS.iteritems())
 
 class NumpyJSONEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -67,6 +68,24 @@ def quantile(a, frac, limit=(), interpolation_method='fraction'):
             raise ValueError("interpolation_method can only be 'fraction', " \
                              "'lower' or 'higher'")
     return score
+
+def interp(x, xp, yp):
+    '''
+    linear interpolation
+    x: x value to interpolate
+    xp: x coords of points
+    yp: y coords of points
+    returns y value corresponding to x
+    '''
+    b = np.searchsorted(xp, x, side='left')
+    if b == 0:
+        return yp[0]
+    if b >= xp.shape[0]:
+        return yp[-1]
+    a = b - 1
+    frac = (x - xp[a]) / (xp[b] - xp[a])
+    y = yp[a] + (yp[b] - yp[a]) * frac
+    return y
 
 def hist_quantile(hist, bins, frac, left=None, right=None):
     assert frac >= 0.0
@@ -190,8 +209,8 @@ class Config(object):
         log_func("name:                    %s" % (self.name))
         log_func("num processes:           %d" % (self.num_processes))
         log_func("permutations:            %d" % (self.perms))
-        log_func("weight method miss:      %s" % (self.weight_miss))
-        log_func("weight method hit:       %s" % (self.weight_hit))
+        log_func("weight method miss:      %s" % (WEIGHT_METHOD_STR[self.weight_miss]))
+        log_func("weight method hit:       %s" % (WEIGHT_METHOD_STR[self.weight_hit]))
         log_func("weight param:            %f" % (self.weight_param))
         log_func("output directory:        %s" % (self.output_dir))
         log_func("input matrix directory:  %s" % (self.matrix_dir))

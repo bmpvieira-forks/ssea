@@ -18,7 +18,7 @@
 <tbody>
 <tr><td>Name</td><td>{{ rowmeta.name }}</td></tr>
 {% for key,value in rowmeta.params|dictsort %}
-    <tr><td>{{ key }}</td><td>{{ value }}</td></tr>
+    <tr><td>Metadata: {{ key }}</td><td>{{ value }}</td></tr>
 {% endfor %}
 <tr><td>Sample set name</td><td>{{ sample_set.name }}</td></tr>
 <tr><td>Sample set description</td><td>{{ sample_set.desc }}</td></tr>

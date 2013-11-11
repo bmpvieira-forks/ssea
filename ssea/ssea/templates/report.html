@@ -16,8 +16,8 @@ $(document).ready(function() {
         headers: { 
             // disable links column and details column 
             1: { sorter: false },
-            3: { sorter: false }
-        } 
+            4: { sorter: false }
+        }
     }); 
 });
 	</script>
@@ -33,12 +33,12 @@ $(document).ready(function() {
 <th>Index</th>
 <th>Details</th>
 <th>Name</th>
-{% for key in params %}
-    <th>{{ key }}</th>
-{% endfor %}
 <th>Sample Set</th>
 <th>Sample Set Description</th>
 <th>Sample Set Size</th>
+{% for key in params %}
+    <th>Metadata: {{ key }}</th>
+{% endfor %}
 <th>ES</th>
 <th>NOM p-val</th>
 <th>T NES</th>
@@ -67,12 +67,12 @@ $(document).ready(function() {
 {% endif %}
 </td>
 <td>{{ res.name }}</td>
-{% for key in params %}
-    <td>{{ res.params[key] }}</td>
-{% endfor %}
 <td>{{ res.sample_set_name }}</td>
 <td>{{ res.sample_set_desc }}</td>
 <td>{{ res.sample_set_size }}</td>
+{% for key in params %}
+    <td>{{ res.params[key] }}</td>
+{% endfor %}
 <td>{{ res.es }}</td>
 <td>{{ res.nominal_p_value }}</td>
 <td>{{ res.nes }}</td>

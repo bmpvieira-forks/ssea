@@ -53,10 +53,8 @@ class ReportConfig(object):
         self.input_dir = None
         self.output_dir = None
         self.thresholds = []
-        self.plot_conf_int = True
-        self.conf_int = 0.95
         self.create_html = True
-        self.create_plots = True
+        self.create_pdf = True
 
     def get_argument_parser(self, parser=None):
         if parser is None:
@@ -72,21 +70,13 @@ class ReportConfig(object):
         grp.add_argument('--no-html', dest="create_html", 
                          action="store_false", default=self.create_html,
                          help='Do not create detailed html reports')
-        grp.add_argument('--no-plot', dest="create_plots", 
-                         action="store_false", default=self.create_plots,
-                         help='Do not create enrichment plots')
+        grp.add_argument('--no-pdf', dest="create_pdf", 
+                         action="store_false", default=self.create_pdf,
+                         help='Do not create PDF plots')
         grp.add_argument('-t', '--threshold', action="append", 
                          dest="thresholds",
                          help='Significance thresholds for generating '
                          'detailed reports [default=%(default)s]')
-        grp.add_argument('--no-plot-conf-int', dest="plot_conf_int", 
-                         action="store_false", default=self.plot_conf_int,
-                         help='Do not show confidence intervals in '
-                         'enrichment plot')
-        grp.add_argument('--conf-int', dest="conf_int", type=float, 
-                         default=self.conf_int,
-                         help='Confidence interval level '
-                         '[default=%(default)s]')
         grp.add_argument('input_dir')
         return parser        
 
@@ -97,18 +87,14 @@ class ReportConfig(object):
         log_func("input directory:         %s" % (self.input_dir))
         log_func("output directory:        %s" % (self.output_dir))
         log_func("create html report:      %s" % (self.create_html))
-        log_func("create plots:            %s" % (self.create_plots))
-        log_func("plot conf interval:      %s" % (self.plot_conf_int))
-        log_func("conf interval:           %f" % (self.conf_int))
+        log_func("create pdf plots:        %s" % (self.create_pdf))
         log_func("thresholds:              %s" % (','.join(''.join(map(str,t)) for t in self.thresholds)))
         log_func("----------------------------------")
 
     def parse_args(self, parser, args):
         # process and check arguments
         self.create_html = args.create_html
-        self.create_plots = args.create_plots
-        self.plot_conf_int = args.plot_conf_int
-        self.conf_int = args.conf_int
+        self.create_pdf = args.create_pdf
         self.num_processes = args.num_processes
         # parse threshold arguments of the form 'attribute,value'
         # for example: nominal_p_value,0.05
@@ -350,29 +336,30 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
     returns dict containing files written
     '''    
     d = {}
-    if reportconfig.create_plots:
-        # enrichment plot
-        title = 'Enrichment plot: %s vs. %s' % (rowmeta.name, sample_set.name)
-        fig = plot_enrichment(result, sseadata, 
-                              title=title, 
-                              fig=global_fig)
-        eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
+    # enrichment plot
+    title = 'Enrichment plot: %s vs. %s' % (rowmeta.name, sample_set.name)
+    fig = plot_enrichment(result, sseadata, 
+                          title=title, 
+                          fig=global_fig)
+    eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
+    fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
+    d['eplot_png'] = eplot_png
+    if reportconfig.create_pdf:    
         eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)
-        fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_pdf))
-        # null distribution plot
-        fig = plot_null_distribution(result.es, 
-                                     Config.NULL_ES_BINS,
-                                     result.null_es_hist,
-                                     fig=global_fig)
-        nplot_png = '%s.%s.null.png' % (rowmeta.name, sample_set.name)
+        d['eplot_pdf'] = eplot_pdf
+    # null distribution plot
+    fig = plot_null_distribution(result.es, 
+                                 Config.NULL_ES_BINS,
+                                 result.null_es_hist,
+                                 fig=global_fig)
+    nplot_png = '%s.%s.null.png' % (rowmeta.name, sample_set.name)
+    fig.savefig(os.path.join(reportconfig.output_dir, nplot_png))        
+    d['nplot_png'] = nplot_png
+    if reportconfig.create_pdf:    
         nplot_pdf = '%s.%s.null.pdf' % (rowmeta.name, sample_set.name)
-        fig.savefig(os.path.join(reportconfig.output_dir, nplot_png))        
         fig.savefig(os.path.join(reportconfig.output_dir, nplot_pdf))
-        d.update({'eplot_png': eplot_png,
-                  'nplot_png': nplot_png})
-        d.update({'eplot_pdf': eplot_pdf,
-                  'nplot_pdf': nplot_pdf})
+        d['nplot_pdf'] = nplot_pdf
     # write tab-delimited details file
     details_rows = sseadata.get_details_table(colmeta)
     details_tsv = '%s.%s.tsv' % (rowmeta.name, sample_set.name)
