@@ -397,6 +397,8 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
     return d
 
 def parse_and_filter_results(filename, thresholds):
+    passed = 0
+    failed = 0    
     with gzip.open(filename, 'rb') as fin:
         for line in fin:
             # load json document (one per line)
@@ -409,8 +411,12 @@ def parse_and_filter_results(filename, thresholds):
                     skip = True
                     break
             if skip:
+                failed += 1
                 continue
+            passed += 1
             yield result
+    logging.info("Parsed %d results, %d passed and %d failed" %
+                 (passed+failed, passed, failed))
 
 def _producer_process(input_queue, filename, config):
     for result in parse_and_filter_results(filename, config.thresholds):

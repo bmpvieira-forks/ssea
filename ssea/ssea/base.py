@@ -426,12 +426,12 @@ class SampleSet(object):
         return sample_sets
     
 class Result(object):
-    FIELDS = ('t_id', 'ss_id', 'rand_seed', 'es', 'es_rank', 'nominal_p_value',
+    FIELDS = ('row_id', 'ss_id', 'rand_seed', 'es', 'es_rank', 'nominal_p_value',
               'core_hits', 'core_misses', 'null_hits', 'null_misses',
-              'fisher_p_value', 'odds_ratio', 't_nes', 'ss_nes', 'global_nes',
-              't_fdr_q_value', 'ss_fdr_q_value', 'global_fdr_q_value',
-              'resample_es_vals', 'resample_es_ranks', 'null_es_vals', 
-              'null_es_ranks', 'null_es_hist')
+              'fisher_p_value', 'odds_ratio', 'nes', 'ss_nes', 'global_nes',
+              'fdr_q_value', 'fwer_p_value', 'ss_fdr_q_value', 
+              'global_fdr_q_value', 'resample_es_vals', 'resample_es_ranks', 
+              'null_es_vals', 'null_es_ranks', 'null_es_hist')
     
     def __init__(self):
         for x in Result.FIELDS:
