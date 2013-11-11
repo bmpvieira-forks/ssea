@@ -3,10 +3,6 @@ Created on Oct 9, 2013
 
 @author: mkiyer
 '''
-'''
-TEST-YSN
-'''
-
 import os
 import logging
 import shutil
