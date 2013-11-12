@@ -557,6 +557,9 @@ def report(config):
                                          Config.SAMPLE_SETS_JSON_FILE)
     config_json_file = os.path.join(config.input_dir, 
                                     Config.CONFIG_JSON_FILE)
+    results_json_flie = os.path.join(config.input_dir, 
+                                    Config.CONFIG_JSON_FILE)
+    
     # write filtered results to output file
     filtered_results_file = os.path.join(config.output_dir, 
                                          'filtered_results.json')

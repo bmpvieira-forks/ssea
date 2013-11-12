@@ -159,6 +159,12 @@ class Config(object):
         d = json.loads(s)
         c.__dict__ = d
         return c
+    
+    @staticmethod
+    def from_dict(d):
+        c = Config()
+        c.__dict__ = d
+        return c
 
     @staticmethod
     def parse_json(filename):
@@ -290,6 +296,15 @@ class Metadata(object):
         return m
     
     @staticmethod
+    def from_dict(d):
+        m = Metadata()
+        m._id = d.pop('_id')
+        m.name = d.pop('name')
+        m.params = d
+        return m
+    
+    
+    @staticmethod
     def parse_json(filename):
         with open(filename, 'r') as fp:
             for line in fp:
@@ -359,13 +374,11 @@ class SampleSet(object):
     @staticmethod
     def from_json(s):
         d = json.loads(s)
-        ss = SampleSet()
-        ss._id = d['_id']
-        ss.name = d['name']
-        ss.desc = d['desc']
-        ss.sample_ids = set(d['sample_ids'])
+        ss = SampleSet(**d)
         return ss
+        
 
+    
     @staticmethod
     def parse_json(filename):
         with open(filename, 'r') as fp:
