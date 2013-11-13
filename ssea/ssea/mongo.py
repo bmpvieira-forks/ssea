@@ -8,7 +8,7 @@ import os
 import sys
 import argparse
 import logging
-import pymongo
+
 import subprocess
 from base import Config
 
