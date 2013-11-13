@@ -8,21 +8,9 @@ import os
 import sys
 import argparse
 import logging
-
+import pymongo
 import subprocess
 from base import Config
-
-'''
-asd;fasjdfl;askfjas;fkljasdf;lkasjf
-'''
-
-'''
-can you see this Matthew?
-'''
-
-'''
-yes i can see this
-'''
 
 # host name of mongo server 
 HOSTNAME = 'pathbio-dx11.path.med.umich.edu'
