@@ -12,6 +12,8 @@ import pymongo
 import subprocess
 from base import Config
 
+import ssea
+_package_dir = ssea.__path__[0]
 
 def db_drop_colls(name):
     client = pymongo.MongoClient()
@@ -51,8 +53,6 @@ def db_import(input_dir, name, host):
 
 def main(argv=None):
     '''Command line options.'''    
-    # create instance of run configuration
-    
     # Setup argument parser
     parser = argparse.ArgumentParser()
     # Add command line parameters
@@ -75,13 +75,6 @@ def main(argv=None):
     logging.basicConfig(level=level,
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     
-    
-    
-    
-    
-    
-    
-         
     if args.delete == True:
         #function to delete all collections
         db_drop_colls(args.name)
