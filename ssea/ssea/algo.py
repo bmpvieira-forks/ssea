@@ -44,7 +44,8 @@ RunResult = namedtuple('RunResult', ('sample_set_index',
                                      'resample_nes'))
 
 # floating point precision to output in report
-PRECISION = 4
+FLOAT_PRECISION = 10
+P_VALUE_PRECISION = 200
 
 # to provide a means of comparing transcript performance within a single
 # set we provide a sample set FDR q value statistic compute from the 
@@ -240,16 +241,16 @@ def ssea_run(counts, size_factors, membership, rng, config):
         # Create result object for this SSEA test
         res = Result()
         res.rand_seed = rand_seed
-        res.es = round(es_vals[j], PRECISION)
+        res.es = round(es_vals[j], FLOAT_PRECISION)
         res.es_rank = int(es_ranks[j])
-        res.nominal_p_value = round(pvals[j],PRECISION)
-        res.nes = round(nes_vals[j],PRECISION)
-        res.fdr_q_value = round(fdr_q_value,PRECISION)
-        res.fwer_p_value = round(fwer_p_value,PRECISION)
+        res.nominal_p_value = round(pvals[j], P_VALUE_PRECISION)
+        res.nes = round(nes_vals[j], FLOAT_PRECISION)
+        res.fdr_q_value = round(fdr_q_value, P_VALUE_PRECISION)
+        res.fwer_p_value = round(fwer_p_value, P_VALUE_PRECISION)
         # save some of the resampled es points 
-        res.resample_es_vals = np.around(resample_es_vals[:Config.MAX_ES_POINTS,j],PRECISION)
+        res.resample_es_vals = np.around(resample_es_vals[:Config.MAX_ES_POINTS,j], FLOAT_PRECISION)
         res.resample_es_ranks = resample_es_ranks[:Config.MAX_ES_POINTS,j]
-        res.null_es_vals = np.around(null_es_vals[:Config.MAX_ES_POINTS,j], PRECISION)
+        res.null_es_vals = np.around(null_es_vals[:Config.MAX_ES_POINTS,j], FLOAT_PRECISION)
         res.null_es_ranks = null_es_ranks[:Config.MAX_ES_POINTS,j]
         res.null_es_hist = np.histogram(null_es_vals[:,j], 
                                         bins=Config.NULL_ES_BINS)[0]
@@ -286,7 +287,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
         res.core_misses = int(core_misses)
         res.null_hits = int(null_hits)
         res.null_misses = int(null_misses)
-        res.fisher_p_value = fisher_p_value
+        res.fisher_p_value = np.round(fisher_p_value, P_VALUE_PRECISION)
         res.odds_ratio = odds_ratio
         # return null distributions for global fdr calculation
         yield RunResult(j, res, 
