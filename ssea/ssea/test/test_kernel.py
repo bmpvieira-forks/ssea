@@ -12,7 +12,7 @@ import numpy as np
 from ssea.base import BOOL_DTYPE
 import ssea.kernel as kernel
 
-class Test(unittest.TestCase):
+class TestKernel(unittest.TestCase):
 
     def test_power_transform(self):
         # power transform methods
@@ -37,6 +37,50 @@ class Test(unittest.TestCase):
         correct = np.log2(a+1.0)
         self.assertTrue(np.array_equal(b,correct))
 
+    def test_random_walk_empty(self):
+        '''
+        test trying to run random walk with an empty array
+        '''
+        nsets = 100
+        weights_hit = np.array([], dtype=np.float)
+        weights_miss = np.array([], dtype=np.float)
+        membership = np.empty((0, nsets), dtype=BOOL_DTYPE)
+        ranks = np.argsort(weights_hit)[::-1]
+        perm = np.arange(0)
+        es_vals, es_ranks, es_runs = \
+            kernel.random_walk(weights_miss, weights_hit, membership, ranks, perm)
+        self.assertTrue(np.all(es_vals == 0))
+        self.assertTrue(np.all(es_ranks == 0))
+        self.assertTrue(es_runs.shape == (0,100))
+
+    def test_kernel_empty(self):
+        '''
+        test trying to run kernel with an empty array
+        '''
+        nsets = 100
+        counts = np.array([], dtype=np.float)
+        size_factors = np.array([], dtype=np.float)
+        membership = np.empty((0, nsets), dtype=BOOL_DTYPE)
+        rng = kernel.RandomState()
+        k = kernel.ssea_kernel(counts, size_factors, membership, rng,
+                                resample_counts=True,
+                                permute_samples=True,
+                                add_noise=True,
+                                noise_loc=1.0,
+                                noise_scale=1.0,
+                                method_miss=3,
+                                method_hit=3,
+                                method_param=1.0)
+        (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
+        es_vals, es_ranks, es_runs) = k
+        self.assertTrue(len(ranks) == 0)
+        self.assertTrue(len(norm_counts) == 0)
+        self.assertTrue(len(norm_counts_miss) == 0)
+        self.assertTrue(len(norm_counts_hit) == 0)
+        self.assertTrue(np.all(es_vals == 0))
+        self.assertTrue(np.all(es_ranks == 0))
+        self.assertTrue(es_runs.shape == (0,100))         
+         
     def test_random_walk_boundary_cases(self):
         nsamples = 10
         nsets = 1

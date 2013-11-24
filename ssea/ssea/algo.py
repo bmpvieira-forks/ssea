@@ -19,7 +19,7 @@ import numpy as np
 
 # local imports
 import ssea.cfisher as fisher
-from ssea.kernel import ssea_kernel2, RandomState
+from ssea.kernel import ssea_kernel, RandomState
 from base import BOOL_DTYPE, Config, Result, chunk
 from countdata import BigCountMatrix
 
@@ -102,7 +102,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     '''
     # first run without resampling count data and save seed
     rand_seed = rng.seed
-    k = ssea_kernel2(counts, size_factors, membership, rng,
+    k = ssea_kernel(counts, size_factors, membership, rng,
                      resample_counts=False,
                      permute_samples=False,
                      add_noise=True,
@@ -121,7 +121,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     resample_es_ranks = np.zeros(shape, dtype=np.int)
     resample_nes_vals = np.empty(shape, dtype=np.float)
     for i in xrange(config.resampling_iterations):
-        k = ssea_kernel2(counts, size_factors, membership, rng,
+        k = ssea_kernel(counts, size_factors, membership, rng,
                          resample_counts=True,
                          permute_samples=False,
                          add_noise=True,
@@ -138,7 +138,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     null_es_vals = np.zeros(shape, dtype=np.float) 
     null_es_ranks = np.zeros(shape, dtype=np.float)
     for i in xrange(config.perms):
-        k = ssea_kernel2(counts, size_factors, membership, rng,
+        k = ssea_kernel(counts, size_factors, membership, rng,
                          resample_counts=True,
                          permute_samples=True,
                          add_noise=True,
