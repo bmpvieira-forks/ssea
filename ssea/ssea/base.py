@@ -134,7 +134,7 @@ class Config(object):
     SAMPLE_SETS_JSON_FILE = 'sample_sets.json'
     CONFIG_JSON_FILE = 'config.json'
     MATRIX_DIR = 'matrix'
-    RESULTS_JSON_FILE = 'results.json.gz'
+    RESULTS_JSON_FILE = 'results.json'
     OUTPUT_HISTS_FILE = 'es_hists.npz'
     
     def __init__(self):

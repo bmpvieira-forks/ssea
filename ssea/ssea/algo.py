@@ -438,7 +438,7 @@ def compute_global_stats_worker(hists_file, input_json_file):
         cdf[1:] = h.cumsum()
         cdfs[k] = cdf
     # parse report json and write new values
-    fin = open(input_json_file, 'rb')
+    fin = open(input_json_file, 'r')
     fmin2 = lambda a, b: b if a < b else a
     fmax2 = lambda a, b: b if a > b else a
     for line in fin:
