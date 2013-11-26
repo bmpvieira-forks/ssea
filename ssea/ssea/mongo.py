@@ -16,6 +16,8 @@ import ssea
 #connects to the mongo db and returns a dictionary  
 #containing each collection in the database
 
+from ssea.algo import ES_BIN_POS, ES_BINS_NEG
+
 import ssea
 _package_dir = ssea.__path__[0]
 

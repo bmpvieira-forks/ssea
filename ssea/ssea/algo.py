@@ -3,12 +3,6 @@ Created on Oct 9, 2013
 
 @author: mkiyer
 '''
-
-'''
-TEST-YSN
-TEST4-YSN
-'''
-
 import os
 import logging
 import shutil
@@ -20,7 +14,7 @@ import numpy as np
 # local imports
 import ssea.cfisher as fisher
 from ssea.kernel import ssea_kernel, RandomState
-from base import BOOL_DTYPE, Config, Result, chunk
+from base import BOOL_DTYPE, Config, Result, chunk, interp
 from countdata import BigCountMatrix
 
 # results directories
@@ -72,6 +66,8 @@ ES_BIN_CENTERS_POS = (ES_BINS_POS[:-1] + ES_BINS_POS[1:]) / 2.
 NUM_NES_BINS = 10001
 NES_BINS_POS = np.logspace(-1,2,num=NUM_NES_BINS,base=10)
 NES_BINS_NEG = -1.0 * np.logspace(-1,2,num=NUM_NES_BINS,base=10)[::-1]
+LOG_NES_BINS_POS = np.log10(NES_BINS_POS)
+LOG_NES_BINS_NEG = -np.log10(-NES_BINS_NEG)
 LOG_NES_BIN_CENTERS_POS = (np.log10(NES_BINS_POS[:-1]) + np.log10(NES_BINS_POS[1:])) / 2
 LOG_NES_BIN_CENTERS_NEG = -((np.log10(-NES_BINS_NEG[:-1]) + np.log10(-NES_BINS_NEG[1:])) / 2)
 NES_BIN_CENTERS_POS = 10.0 ** LOG_NES_BIN_CENTERS_POS
@@ -436,10 +432,18 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
     null_nes_pos_mean = np.fabs((hists['null_nes_pos'] * NES_BIN_CENTERS_POS).sum() / 
                                 null_nes_pos_counts)
     # compute cumulative sums for fdr interpolation
-    null_nes_cumsum_neg = hists['null_nes_neg'].cumsum()
-    null_nes_cumsum_pos = hists['null_nes_pos'].cumsum()
-    obs_nes_cumsum_pos = hists['obs_nes_pos'].cumsum()
-    obs_nes_cumsum_neg = hists['obs_nes_neg'].cumsum()
+    cdfs = {}
+    for k in ('null_es_neg', 'null_es_pos', 'obs_es_neg', 'obs_es_pos'):
+        h = hists[k]
+        cdf2d = np.zeros((h.shape[0],h.shape[1]+1), dtype=np.float)
+        for j in xrange(h.shape[0]):
+            cdf2d[j,1:] = h[j,:].cumsum()
+        cdfs[k] = cdf2d
+    for k in ('null_nes_neg', 'null_nes_pos', 'obs_nes_neg', 'obs_nes_pos'):
+        h = hists[k]
+        cdf = np.zeros(h.shape[0]+1, dtype=np.float)
+        cdf[1:] = h.cumsum()
+        cdfs[k] = cdf
     # parse report json and write new values
     fin = gzip.open(input_json_file, 'rb')
     fout = gzip.open(output_json_file, 'wb')
@@ -469,21 +473,21 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
             # compute the cumulative sums of ES histograms
             # use interpolation to find fraction ES(null) <= ES* and account for
             # the observed permutation in the null set
-            null_es_cumsum = hists['null_es_neg'][i].cumsum()
-            ss_null_n = 1 + np.interp(es, ES_BIN_CENTERS_NEG, null_es_cumsum)
+            null_es_cumsum = cdfs['null_es_neg'][i]
+            ss_null_n = 1 + interp(es, ES_BINS_NEG, null_es_cumsum)
             ss_null_d = 1 + null_es_cumsum[-1]
-            obs_es_cumsum = hists['obs_es_neg'][i].cumsum()
-            ss_obs_n = fmin2(np.interp(es, ES_BIN_CENTERS_NEG, obs_es_cumsum), 1.0)
+            obs_es_cumsum = cdfs['obs_es_neg'][i]
+            ss_obs_n = fmin2(interp(es, ES_BINS_NEG, obs_es_cumsum), 1.0)
             ss_obs_d = obs_es_cumsum[-1]
             ss_n = (ss_null_n / ss_null_d)
             ss_d = (ss_obs_n / ss_obs_d)
             # clip the observed NES to fit within the bins (so we can take the log)
             # and interpolate in log space for NES because bins are in log space
             log_nes_clip = -1.0 * np.log10(-np.clip(nes, NES_NEG_MIN, NES_NEG_MAX))
-            global_null_n = 1 + np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_NEG, null_nes_cumsum_neg)
-            global_null_d = 1 + null_nes_cumsum_neg[-1]
-            global_obs_n = fmin2(np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_NEG, obs_nes_cumsum_neg), 1.0)
-            global_obs_d = obs_nes_cumsum_neg[-1]
+            global_null_n = 1 + interp(log_nes_clip, LOG_NES_BINS_NEG, cdfs['null_nes_neg'])
+            global_null_d = 1 + cdfs['null_nes_neg'][-1]
+            global_obs_n = fmin2(interp(log_nes_clip, LOG_NES_BINS_NEG, cdfs['obs_nes_neg']), 1.0)
+            global_obs_d = cdfs['obs_nes_neg'][-1]
             global_n = (global_null_n / global_null_d)
             global_d = (global_obs_n / global_obs_d)
         else:
@@ -499,20 +503,20 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
             # use interpolation to find fraction ES(null) >= ES* and
             # ES(observed) >= ES* and account for observed permutation in 
             # the null set
-            null_es_cumsum = hists['null_es_pos'][i].cumsum()
-            ss_null_n = np.interp(es, ES_BIN_CENTERS_POS, null_es_cumsum)
+            null_es_cumsum = cdfs['null_es_pos'][i]
+            ss_null_n = interp(es, ES_BINS_POS, null_es_cumsum)
             ss_null_d = 1.0 + null_es_cumsum[-1]
-            obs_es_cumsum = hists['obs_es_pos'][i].cumsum()
-            ss_obs_n = fmax2(np.interp(es, ES_BIN_CENTERS_POS, obs_es_cumsum), obs_es_cumsum[-1] - 1)
+            obs_es_cumsum = cdfs['obs_es_pos'][i]
+            ss_obs_n = fmax2(interp(es, ES_BINS_POS, obs_es_cumsum), obs_es_cumsum[-1] - 1)
             ss_obs_d = obs_es_cumsum[-1]
             ss_n = 1.0 - (ss_null_n / ss_null_d)
             ss_d = 1.0 - (ss_obs_n / ss_obs_d)
             # interpolate NES in log space
             log_nes_clip = np.log10(np.clip(nes, NES_POS_MIN, NES_POS_MAX))
-            global_null_n = np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_POS, null_nes_cumsum_pos)
-            global_null_d = 1.0 + null_nes_cumsum_pos[-1]
-            global_obs_n = fmax2(np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_POS, obs_nes_cumsum_pos), obs_es_cumsum[-1] - 1)
-            global_obs_d = obs_nes_cumsum_pos[-1]
+            global_null_n = interp(log_nes_clip, LOG_NES_BINS_POS, cdfs['null_nes_pos'])
+            global_null_d = 1.0 + cdfs['null_nes_pos'][-1]
+            global_obs_n = fmax2(interp(log_nes_clip, LOG_NES_BINS_POS, cdfs['obs_nes_pos']), obs_es_cumsum[-1] - 1)
+            global_obs_d = cdfs['obs_nes_pos'][-1]
             global_n = 1.0 - (global_null_n / global_null_d)
             global_d = 1.0 - (global_obs_n / global_obs_d)
         #print 'ES=%f NES=%f ss_n=%f (%f / %f) ss_d=%f (%f / %f) g_n=%f (%f / %f) g_d=%f (%f / %f)' % (es, nes, ss_n, ss_null_n, ss_null_d, ss_d, ss_obs_n, ss_obs_d, global_n, global_null_n, global_null_d, global_d, global_obs_n, global_obs_d)
