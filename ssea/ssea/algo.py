@@ -5,10 +5,9 @@ Created on Oct 9, 2013
 '''
 import os
 import logging
-import shutil
-import gzip
+import subprocess
 from collections import namedtuple
-from multiprocessing import Process, Queue
+from multiprocessing import Process
 import numpy as np
 
 # local imports
@@ -19,7 +18,6 @@ from countdata import BigCountMatrix
 
 # results directories
 TMP_DIR = 'tmp'
-TMP_JSON_FILE = 'tmp.json.gz'
 
 # improves readability of code
 KernelResult = namedtuple('KernelResult', ('ranks',
@@ -316,7 +314,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     # setup global ES histograms
     hists = _init_hists(len(sample_sets))
     # setup report file
-    outfileh = gzip.open(output_json_file, 'wb')    
+    outfileh = open(output_json_file, 'wb')    
     for i in xrange(startrow, endrow):
         logging.debug("\tRow: %d (%d-%d)" % (i, startrow, endrow))
         # read from memmap
@@ -366,7 +364,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     bm.close()
 
 def ssea_parallel(matrix_dir, shape, sample_sets, config, 
-                  output_hist_file): 
+                  worker_json_files, output_hist_file): 
     '''
     main SSEA loop (multiprocessing implementation)
     
@@ -376,7 +374,6 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
     tmp_dir = os.path.join(config.output_dir, TMP_DIR)
     procs = []
     chunks = []
-    worker_json_files = []
     worker_hist_files = []
     # divide matrix rows across processes
     for startrow,endrow in chunk(shape[0], config.num_processes):
@@ -384,12 +381,10 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
         logging.debug("Worker process %d range %d-%d (%d total rows)" % 
                       (i, startrow, endrow, (endrow-startrow)))
         # worker output files
-        json_file = os.path.join(tmp_dir, "w%03d.json.gz" % (i))
         hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
-        worker_json_files.append(json_file)
         worker_hist_files.append(hist_file)
         args = (matrix_dir, shape, sample_sets, config, 
-                json_file, hist_file, startrow, endrow)        
+                worker_json_files[i], hist_file, startrow, endrow)        
         p = Process(target=ssea_serial, args=args)
         p.start()
         procs.append(p)
@@ -408,7 +403,9 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
             hists[k] += npzfile[k]
         npzfile.close()
     np.savez(output_hist_file, **hists)
-    return worker_json_files
+    # remove worker histograms
+    for filename in worker_hist_files:
+        os.remove(filename)
 
 def compute_global_stats_worker(hists_file, input_json_file):
     # load histogram data
@@ -441,7 +438,7 @@ def compute_global_stats_worker(hists_file, input_json_file):
         cdf[1:] = h.cumsum()
         cdfs[k] = cdf
     # parse report json and write new values
-    fin = gzip.open(input_json_file, 'rb')
+    fin = open(input_json_file, 'rb')
     fmin2 = lambda a, b: b if a < b else a
     fmax2 = lambda a, b: b if a > b else a
     for line in fin:
@@ -528,33 +525,20 @@ def compute_global_stats_worker(hists_file, input_json_file):
     fin.close()
     hists.close()
     
-def compute_global_stats_parallel(hists_file, input_json_files, output_json_file):
-    def _worker(input_json_file, q):
-        for json_string in compute_global_stats_worker(hists_file, input_json_file):
-            q.put(json_string)
-        q.put(None)
-    # create multiprocessing queues for passing data
-    q = Queue(maxsize=len(input_json_files)*4) 
+def compute_global_stats_parallel(hists_file, input_json_files, output_json_files):
+    def _worker(input_json_file, output_json_file):
+        with open(output_json_file, 'w') as fout:
+            for json_string in compute_global_stats_worker(hists_file, input_json_file):
+                print >>fout, json_string
     # start worker processes
     procs = []
-    for input_json_file in input_json_files:
-        p = Process(target=_worker, args=(input_json_file, q))
+    for i in xrange(len(input_json_files)):
+        p = Process(target=_worker, args=(input_json_files[i], output_json_files[i]))
         p.start()
         procs.append(p)
-    # output header
-    num_alive = len(procs)
-    with gzip.open(output_json_file, 'wb') as fout:
-        while num_alive > 0:
-            json_string = q.get()
-            if json_string is None:
-                num_alive -= 1
-                logging.debug("Main process detected worker finished, %d still alive" % (num_alive))
-            else:
-                print >>fout, json_string
-    logging.debug("Joining all processes")
     # wait for consumers to finish
     for p in procs:
-        p.join()    
+        p.join()
 
 def ssea_main(config, sample_sets, row_metadata, col_metadata):
     '''
@@ -601,24 +585,42 @@ def ssea_main(config, sample_sets, row_metadata, col_metadata):
         print >>fp, config.to_json()
     # output files
     es_hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
+    worker_json_files = []
+    worker_json_stats_files = []
+    for i in xrange(config.num_processes):
+        # worker output files
+        json_file = os.path.join(tmp_dir, "w%03d.json" % (i))
+        json_stats_file = os.path.join(tmp_dir, "w%03d.stats.json" % (i))
+        worker_json_files.append(json_file)
+        worker_json_stats_files.append(json_stats_file)
     shape = (len(row_metadata),len(col_metadata))
     if config.num_processes > 1:
         logging.info("Running SSEA in parallel with %d processes" % 
                      (config.num_processes))
-        worker_json_files = ssea_parallel(config.matrix_dir, shape, 
-                                          sample_sets, config, 
-                                          es_hists_file)
+        ssea_parallel(config.matrix_dir, shape, 
+                      sample_sets, config,
+                      worker_json_files, 
+                      es_hists_file)
     else:
         logging.info("Running SSEA in serial")
-        tmp_json_file = os.path.join(tmp_dir, TMP_JSON_FILE)
         ssea_serial(config.matrix_dir, shape, sample_sets, config, 
-                    tmp_json_file, es_hists_file)
-        worker_json_files = [tmp_json_file]
+                    worker_json_files[0], es_hists_file)
     # use ES null distributions to compute global statistics
     # and produce a report
     logging.info("Computing global statistics")
+    compute_global_stats_parallel(es_hists_file, worker_json_files, 
+                                  worker_json_stats_files)
+    # merge json stats files
     json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
-    compute_global_stats_parallel(es_hists_file, worker_json_files, json_file)
+    # run a shell 'cat' command because it is fast
+    args = ['cat']
+    args.extend(worker_json_stats_files)
+    args.append('>')
+    args.append(json_file)
+    cmd = ' '.join(args)
+    retcode = subprocess.call(cmd, shell=True)
+    if retcode != 0:
+        logging.error('Error concatenating worker json files')
     # cleanup
     #if os.path.exists(tmp_dir):
     #    shutil.rmtree(tmp_dir)
