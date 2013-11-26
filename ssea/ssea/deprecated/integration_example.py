@@ -3,6 +3,9 @@ Created on Oct 29, 2013
 
 @author: mkiyer
 '''
+
+# THIS NO LONGER APPLIES
+
 import numpy as np
 
 # import classes needed to set up SSEA

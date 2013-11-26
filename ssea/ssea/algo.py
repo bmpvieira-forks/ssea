@@ -3,29 +3,21 @@ Created on Oct 9, 2013
 
 @author: mkiyer
 '''
-
-'''
-TEST-YSN
-TEST4-YSN
-'''
-
 import os
 import logging
-import shutil
-import gzip
+import subprocess
 from collections import namedtuple
 from multiprocessing import Process
 import numpy as np
 
 # local imports
 import ssea.cfisher as fisher
-from ssea.kernel import ssea_kernel2, RandomState
-from base import BOOL_DTYPE, Config, Result, chunk
+from ssea.kernel import ssea_kernel, RandomState
+from base import BOOL_DTYPE, Config, Result, chunk, interp
 from countdata import BigCountMatrix
 
 # results directories
 TMP_DIR = 'tmp'
-TMP_JSON_FILE = 'tmp.json.gz'
 
 # improves readability of code
 KernelResult = namedtuple('KernelResult', ('ranks',
@@ -72,6 +64,8 @@ ES_BIN_CENTERS_POS = (ES_BINS_POS[:-1] + ES_BINS_POS[1:]) / 2.
 NUM_NES_BINS = 10001
 NES_BINS_POS = np.logspace(-1,2,num=NUM_NES_BINS,base=10)
 NES_BINS_NEG = -1.0 * np.logspace(-1,2,num=NUM_NES_BINS,base=10)[::-1]
+LOG_NES_BINS_POS = np.log10(NES_BINS_POS)
+LOG_NES_BINS_NEG = -np.log10(-NES_BINS_NEG)
 LOG_NES_BIN_CENTERS_POS = (np.log10(NES_BINS_POS[:-1]) + np.log10(NES_BINS_POS[1:])) / 2
 LOG_NES_BIN_CENTERS_NEG = -((np.log10(-NES_BINS_NEG[:-1]) + np.log10(-NES_BINS_NEG[1:])) / 2)
 NES_BIN_CENTERS_POS = 10.0 ** LOG_NES_BIN_CENTERS_POS
@@ -102,7 +96,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     '''
     # first run without resampling count data and save seed
     rand_seed = rng.seed
-    k = ssea_kernel2(counts, size_factors, membership, rng,
+    k = ssea_kernel(counts, size_factors, membership, rng,
                      resample_counts=False,
                      permute_samples=False,
                      add_noise=True,
@@ -121,7 +115,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     resample_es_ranks = np.zeros(shape, dtype=np.int)
     resample_nes_vals = np.empty(shape, dtype=np.float)
     for i in xrange(config.resampling_iterations):
-        k = ssea_kernel2(counts, size_factors, membership, rng,
+        k = ssea_kernel(counts, size_factors, membership, rng,
                          resample_counts=True,
                          permute_samples=False,
                          add_noise=True,
@@ -138,7 +132,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     null_es_vals = np.zeros(shape, dtype=np.float) 
     null_es_ranks = np.zeros(shape, dtype=np.float)
     for i in xrange(config.perms):
-        k = ssea_kernel2(counts, size_factors, membership, rng,
+        k = ssea_kernel(counts, size_factors, membership, rng,
                          resample_counts=True,
                          permute_samples=True,
                          add_noise=True,
@@ -320,7 +314,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     # setup global ES histograms
     hists = _init_hists(len(sample_sets))
     # setup report file
-    outfileh = gzip.open(output_json_file, 'wb')    
+    outfileh = open(output_json_file, 'wb')    
     for i in xrange(startrow, endrow):
         logging.debug("\tRow: %d (%d-%d)" % (i, startrow, endrow))
         # read from memmap
@@ -370,7 +364,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     bm.close()
 
 def ssea_parallel(matrix_dir, shape, sample_sets, config, 
-                  output_json_file, output_hist_file): 
+                  worker_json_files, output_hist_file): 
     '''
     main SSEA loop (multiprocessing implementation)
     
@@ -380,7 +374,6 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
     tmp_dir = os.path.join(config.output_dir, TMP_DIR)
     procs = []
     chunks = []
-    worker_json_files = []
     worker_hist_files = []
     # divide matrix rows across processes
     for startrow,endrow in chunk(shape[0], config.num_processes):
@@ -388,12 +381,10 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
         logging.debug("Worker process %d range %d-%d (%d total rows)" % 
                       (i, startrow, endrow, (endrow-startrow)))
         # worker output files
-        json_file = os.path.join(tmp_dir, "w%03d.json" % (i))
         hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
-        worker_json_files.append(json_file)
         worker_hist_files.append(hist_file)
         args = (matrix_dir, shape, sample_sets, config, 
-                json_file, hist_file, startrow, endrow)        
+                worker_json_files[i], hist_file, startrow, endrow)        
         p = Process(target=ssea_serial, args=args)
         p.start()
         procs.append(p)
@@ -402,23 +393,21 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
     for p in procs:
         p.join()
     # merge workers
-    logging.info("Merging %d worker results" % (len(procs)))
-    fout = open(output_json_file, 'wb')
+    logging.info("Merging %d worker histograms" % (len(procs)))
     # setup global ES histograms
     hists = _init_hists(len(sample_sets))
     for i in xrange(len(procs)):        
-        # merge json files
-        with open(worker_json_files[i], 'rb') as fin:
-            shutil.copyfileobj(fin, fout)      
         # aggregate numpy arrays
         npzfile = np.load(worker_hist_files[i])
         for k in hists.iterkeys():
             hists[k] += npzfile[k]
         npzfile.close()
-    fout.close() 
     np.savez(output_hist_file, **hists)
+    # remove worker histograms
+    for filename in worker_hist_files:
+        os.remove(filename)
 
-def compute_global_stats(hists_file, input_json_file, output_json_file):
+def compute_global_stats_worker(hists_file, input_json_file):
     # load histogram data
     hists = np.load(hists_file)
     # compute per-sample-set means
@@ -436,13 +425,20 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
     null_nes_pos_mean = np.fabs((hists['null_nes_pos'] * NES_BIN_CENTERS_POS).sum() / 
                                 null_nes_pos_counts)
     # compute cumulative sums for fdr interpolation
-    null_nes_cumsum_neg = hists['null_nes_neg'].cumsum()
-    null_nes_cumsum_pos = hists['null_nes_pos'].cumsum()
-    obs_nes_cumsum_pos = hists['obs_nes_pos'].cumsum()
-    obs_nes_cumsum_neg = hists['obs_nes_neg'].cumsum()
+    cdfs = {}
+    for k in ('null_es_neg', 'null_es_pos', 'obs_es_neg', 'obs_es_pos'):
+        h = hists[k]
+        cdf2d = np.zeros((h.shape[0],h.shape[1]+1), dtype=np.float)
+        for j in xrange(h.shape[0]):
+            cdf2d[j,1:] = h[j,:].cumsum()
+        cdfs[k] = cdf2d
+    for k in ('null_nes_neg', 'null_nes_pos', 'obs_nes_neg', 'obs_nes_pos'):
+        h = hists[k]
+        cdf = np.zeros(h.shape[0]+1, dtype=np.float)
+        cdf[1:] = h.cumsum()
+        cdfs[k] = cdf
     # parse report json and write new values
-    fin = gzip.open(input_json_file, 'rb')
-    fout = gzip.open(output_json_file, 'wb')
+    fin = open(input_json_file, 'rb')
     fmin2 = lambda a, b: b if a < b else a
     fmax2 = lambda a, b: b if a > b else a
     for line in fin:
@@ -469,21 +465,21 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
             # compute the cumulative sums of ES histograms
             # use interpolation to find fraction ES(null) <= ES* and account for
             # the observed permutation in the null set
-            null_es_cumsum = hists['null_es_neg'][i].cumsum()
-            ss_null_n = 1 + np.interp(es, ES_BIN_CENTERS_NEG, null_es_cumsum)
+            null_es_cumsum = cdfs['null_es_neg'][i]
+            ss_null_n = 1 + interp(es, ES_BINS_NEG, null_es_cumsum)
             ss_null_d = 1 + null_es_cumsum[-1]
-            obs_es_cumsum = hists['obs_es_neg'][i].cumsum()
-            ss_obs_n = fmin2(np.interp(es, ES_BIN_CENTERS_NEG, obs_es_cumsum), 1.0)
+            obs_es_cumsum = cdfs['obs_es_neg'][i]
+            ss_obs_n = fmin2(interp(es, ES_BINS_NEG, obs_es_cumsum), 1.0)
             ss_obs_d = obs_es_cumsum[-1]
             ss_n = (ss_null_n / ss_null_d)
             ss_d = (ss_obs_n / ss_obs_d)
             # clip the observed NES to fit within the bins (so we can take the log)
             # and interpolate in log space for NES because bins are in log space
             log_nes_clip = -1.0 * np.log10(-np.clip(nes, NES_NEG_MIN, NES_NEG_MAX))
-            global_null_n = 1 + np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_NEG, null_nes_cumsum_neg)
-            global_null_d = 1 + null_nes_cumsum_neg[-1]
-            global_obs_n = fmin2(np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_NEG, obs_nes_cumsum_neg), 1.0)
-            global_obs_d = obs_nes_cumsum_neg[-1]
+            global_null_n = 1 + interp(log_nes_clip, LOG_NES_BINS_NEG, cdfs['null_nes_neg'])
+            global_null_d = 1 + cdfs['null_nes_neg'][-1]
+            global_obs_n = fmin2(interp(log_nes_clip, LOG_NES_BINS_NEG, cdfs['obs_nes_neg']), 1.0)
+            global_obs_d = cdfs['obs_nes_neg'][-1]
             global_n = (global_null_n / global_null_d)
             global_d = (global_obs_n / global_obs_d)
         else:
@@ -499,20 +495,20 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
             # use interpolation to find fraction ES(null) >= ES* and
             # ES(observed) >= ES* and account for observed permutation in 
             # the null set
-            null_es_cumsum = hists['null_es_pos'][i].cumsum()
-            ss_null_n = np.interp(es, ES_BIN_CENTERS_POS, null_es_cumsum)
+            null_es_cumsum = cdfs['null_es_pos'][i]
+            ss_null_n = interp(es, ES_BINS_POS, null_es_cumsum)
             ss_null_d = 1.0 + null_es_cumsum[-1]
-            obs_es_cumsum = hists['obs_es_pos'][i].cumsum()
-            ss_obs_n = fmax2(np.interp(es, ES_BIN_CENTERS_POS, obs_es_cumsum), obs_es_cumsum[-1] - 1)
+            obs_es_cumsum = cdfs['obs_es_pos'][i]
+            ss_obs_n = fmax2(interp(es, ES_BINS_POS, obs_es_cumsum), obs_es_cumsum[-1] - 1)
             ss_obs_d = obs_es_cumsum[-1]
             ss_n = 1.0 - (ss_null_n / ss_null_d)
             ss_d = 1.0 - (ss_obs_n / ss_obs_d)
             # interpolate NES in log space
             log_nes_clip = np.log10(np.clip(nes, NES_POS_MIN, NES_POS_MAX))
-            global_null_n = np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_POS, null_nes_cumsum_pos)
-            global_null_d = 1.0 + null_nes_cumsum_pos[-1]
-            global_obs_n = fmax2(np.interp(log_nes_clip, LOG_NES_BIN_CENTERS_POS, obs_nes_cumsum_pos), obs_es_cumsum[-1] - 1)
-            global_obs_d = obs_nes_cumsum_pos[-1]
+            global_null_n = interp(log_nes_clip, LOG_NES_BINS_POS, cdfs['null_nes_pos'])
+            global_null_d = 1.0 + cdfs['null_nes_pos'][-1]
+            global_obs_n = fmax2(interp(log_nes_clip, LOG_NES_BINS_POS, cdfs['obs_nes_pos']), obs_es_cumsum[-1] - 1)
+            global_obs_d = cdfs['obs_nes_pos'][-1]
             global_n = 1.0 - (global_null_n / global_null_d)
             global_d = 1.0 - (global_obs_n / global_obs_d)
         #print 'ES=%f NES=%f ss_n=%f (%f / %f) ss_d=%f (%f / %f) g_n=%f (%f / %f) g_d=%f (%f / %f)' % (es, nes, ss_n, ss_null_n, ss_null_d, ss_d, ss_obs_n, ss_obs_d, global_n, global_null_n, global_null_d, global_d, global_obs_n, global_obs_d)
@@ -524,11 +520,25 @@ def compute_global_stats(hists_file, input_json_file, output_json_file):
         res.ss_fdr_q_value = ss_fdr_q_value
         res.global_fdr_q_value = global_fdr_q_value
         # convert back to json
-        print >>fout, res.to_json()
+        yield res.to_json()
     # cleanup
     fin.close()
-    fout.close()
     hists.close()
+    
+def compute_global_stats_parallel(hists_file, input_json_files, output_json_files):
+    def _worker(input_json_file, output_json_file):
+        with open(output_json_file, 'w') as fout:
+            for json_string in compute_global_stats_worker(hists_file, input_json_file):
+                print >>fout, json_string
+    # start worker processes
+    procs = []
+    for i in xrange(len(input_json_files)):
+        p = Process(target=_worker, args=(input_json_files[i], output_json_files[i]))
+        p.start()
+        procs.append(p)
+    # wait for consumers to finish
+    for p in procs:
+        p.join()
 
 def ssea_main(config, sample_sets, row_metadata, col_metadata):
     '''
@@ -547,27 +557,6 @@ def ssea_main(config, sample_sets, row_metadata, col_metadata):
     if not os.path.exists(tmp_dir):
         logging.debug("Creating tmp directory '%s'" % (tmp_dir))
         os.makedirs(tmp_dir)
-    # output files
-    tmp_json_file = os.path.join(tmp_dir, TMP_JSON_FILE)
-    es_hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
-    shape = (len(row_metadata),len(col_metadata))
-    if config.num_processes > 1:
-        logging.info("Running SSEA in parallel with %d processes" % 
-                     (config.num_processes))
-        ssea_parallel(config.matrix_dir, shape, sample_sets, config, 
-                      tmp_json_file, es_hists_file)
-    else:
-        logging.info("Running SSEA in serial")
-        ssea_serial(config.matrix_dir, shape, sample_sets, config, 
-                    tmp_json_file, es_hists_file)
-    # use ES null distributions to compute global statistics
-    # and produce a report
-    logging.info("Computing global statistics")
-    json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
-    compute_global_stats(es_hists_file, tmp_json_file, json_file)
-    # cleanup
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
     # write row metadata output
     metadata_file = os.path.join(config.output_dir, 
                                  Config.METADATA_JSON_FILE)
@@ -594,4 +583,45 @@ def ssea_main(config, sample_sets, row_metadata, col_metadata):
     logging.debug("Writing configuration '%s'" % (config_file))
     with open(config_file, 'w') as fp:
         print >>fp, config.to_json()
+    # output files
+    es_hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
+    worker_json_files = []
+    worker_json_stats_files = []
+    for i in xrange(config.num_processes):
+        # worker output files
+        json_file = os.path.join(tmp_dir, "w%03d.json" % (i))
+        json_stats_file = os.path.join(tmp_dir, "w%03d.stats.json" % (i))
+        worker_json_files.append(json_file)
+        worker_json_stats_files.append(json_stats_file)
+    shape = (len(row_metadata),len(col_metadata))
+    if config.num_processes > 1:
+        logging.info("Running SSEA in parallel with %d processes" % 
+                     (config.num_processes))
+        ssea_parallel(config.matrix_dir, shape, 
+                      sample_sets, config,
+                      worker_json_files, 
+                      es_hists_file)
+    else:
+        logging.info("Running SSEA in serial")
+        ssea_serial(config.matrix_dir, shape, sample_sets, config, 
+                    worker_json_files[0], es_hists_file)
+    # use ES null distributions to compute global statistics
+    # and produce a report
+    logging.info("Computing global statistics")
+    compute_global_stats_parallel(es_hists_file, worker_json_files, 
+                                  worker_json_stats_files)
+    # merge json stats files
+    json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
+    # run a shell 'cat' command because it is fast
+    args = ['cat']
+    args.extend(worker_json_stats_files)
+    args.append('>')
+    args.append(json_file)
+    cmd = ' '.join(args)
+    retcode = subprocess.call(cmd, shell=True)
+    if retcode != 0:
+        logging.error('Error concatenating worker json files')
+    # cleanup
+    #if os.path.exists(tmp_dir):
+    #    shutil.rmtree(tmp_dir)
     logging.info("Finished")

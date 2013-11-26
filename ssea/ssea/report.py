@@ -26,7 +26,7 @@ from matplotlib import figure
 
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.kernel import ssea_kernel2, RandomState
+from ssea.kernel import ssea_kernel, RandomState
 from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile
 from countdata import BigCountMatrix
 
@@ -153,7 +153,7 @@ def ssea_rerun(sample_ids, counts, size_factors, sample_set, seed, config):
     rng = RandomState(seed)
     (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
      es_vals, es_ranks, es_runs) = \
-        ssea_kernel2(counts, size_factors, membership, rng,
+        ssea_kernel(counts, size_factors, membership, rng,
                      resample_counts=False,
                      permute_samples=False,
                      add_noise=True,

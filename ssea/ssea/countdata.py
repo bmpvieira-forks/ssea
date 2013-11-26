@@ -58,11 +58,11 @@ class BigCountMatrix(CountMatrix):
         del self.counts_t
         
     def copy(self, output_dir, rowsubset=None, colsubset=None):
-        if rowsubset is None:
+        if (rowsubset is None) or (len(rowsubset) == 0):
             rowsubset = set(self.rownames)
         else:
             rowsubset = set(rowsubset)
-        if colsubset is None:
+        if (colsubset is None) or (len(colsubset) == 0):
             colsubset = set(self.colnames)
         else:
             colsubset = set(colsubset)  

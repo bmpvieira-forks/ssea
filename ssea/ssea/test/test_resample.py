@@ -28,6 +28,16 @@ def dump_sample(input_dir):
             a = 'NA'
         print bm.rownames[i], str(a)
 
+def search_for_all_nan(input_dir):
+    logging.debug("Opening matrix memmap files")
+    bm = BigCountMatrix.open(input_dir)
+    for i in xrange(bm.shape[0]):
+        a = bm.counts[i,:]
+        a = np.array(a, dtype=np.float)
+        b = a[np.isfinite(a)]
+        if len(b) < len(a):
+            print i, len(b), len(a)
+
 def normalize_count_data(input_dir):
     # setup matrix
     logging.debug("Opening matrix memmap files")
@@ -68,6 +78,8 @@ def normalize_count_data(input_dir):
 class Test(unittest.TestCase):
 
     def testName(self):
+        search_for_all_nan('/mctp/users/mkiyer/projects/ssea/isoform_count_matrix_v5')
+        return
         dump_sample('/mctp/users/mkiyer/projects/ssea/isoform_count_matrix_v4')
         return
         rpkm_versus_count('/mctp/users/mkiyer/projects/ssea/isoform_count_matrix_v4')
