@@ -25,6 +25,7 @@ def main(argv=None):
         parser.error('input directory %s not found' % (args.input_dir))
     if os.path.exists(args.output_json_file):
         parser.error('output json file %s exists' % (args.output_json_file))
+    output_json_file = args.output_json_file
     input_dir = args.input_dir
     tmp_dir = os.path.join(args.input_dir, TMP_DIR)
     if not os.path.exists(tmp_dir):
@@ -37,12 +38,11 @@ def main(argv=None):
         worker_json_stats_files.append(os.path.join(tmp_dir, 'w%03d.stats.json' % (i)))
     compute_global_stats_parallel(es_hists_file, worker_json_files, worker_json_stats_files)
     # run a shell 'cat' command because it is fast
-    args = ['cat']
-    args.extend(worker_json_stats_files)
-    args.append('>')
-    args.append(args.output_json_file)
-    cmd = ' '.join(args)
-    retcode = subprocess.call(cmd, shell=True)
+    cmdlist = ['cat']
+    cmdlist.extend(worker_json_stats_files)
+    cmdlist.append('>')
+    cmdlist.append(output_json_file)
+    retcode = subprocess.call(' '.join(cmdlist), shell=True)
     if retcode != 0:
         logging.error('Error concatenating worker json files')    
     return 0
