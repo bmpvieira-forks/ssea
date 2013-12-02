@@ -23,9 +23,9 @@ from countdata import BigCountMatrix
 TMP_DIR = 'tmp'
 
 # temporary files
-JSON_RAW_SUFFIX = '.raw.json'
-JSON_STATS_SUFFIX = '.stats.json'
-JSON_SORTED_SUFFIX = '.stats.sorted.json'
+JSON_UNSORTED_SUFFIX = '.unsorted.json'
+JSON_SORTED_SUFFIX = '.sorted.json'
+NPY_HISTS_SUFFIX = '.hists.npz'
 
 # improves readability of code
 KernelResult = namedtuple('KernelResult', ('ranks',
@@ -70,6 +70,11 @@ def _init_hists(nsets):
             'null_nes_neg': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float),
             'obs_nes_pos': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float),
             'obs_nes_neg': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float)}
+
+def _cmp_json_nes(line):
+    '''comparison function for batch_sort'''
+    res = Result.from_json(line.strip())
+    return abs(res.nes)
 
 def ssea_run(counts, size_factors, membership, rng, config):
     '''
@@ -263,8 +268,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
                         null_nes_vals[:,j],
                         resample_nes_vals[:,j])
 
-def ssea_serial(matrix_dir, shape, sample_sets, config, 
-                output_basename, output_hist_file, 
+def ssea_serial(matrix_dir, shape, sample_sets, config, output_basename, 
                 startrow=None, endrow=None):
     '''
     main SSEA loop (single processor)
@@ -273,8 +277,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     shape: tuple with shape of weight matrix (nrows,ncols)
     sample_sets: list of SampleSet objects
     config: Config object
-    output_json_file: filename for writing results (JSON format)
-    output_hist_file: filename for writing ES histograms
+    output_basename: prefix for writing result files
     '''
     # initialize random number generator
     rng = RandomState()
@@ -289,8 +292,8 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     # setup global ES histograms
     hists = _init_hists(len(sample_sets))
     # setup report file
-    output_json_file = output_basename + JSON_RAW_SUFFIX
-    outfileh = open(output_json_file, 'wb')    
+    unsorted_json_file = output_basename + JSON_UNSORTED_SUFFIX
+    outfileh = open(unsorted_json_file, 'wb')    
     for i in xrange(startrow, endrow):
         logging.debug("\tRow: %d (%d-%d)" % (i, startrow, endrow))
         # read from memmap
@@ -333,33 +336,53 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     # close report file
     outfileh.close()
     # save histograms to a file
+    output_hist_file = output_basename + NPY_HISTS_SUFFIX
     np.savez(output_hist_file, **hists)
     # cleanup
     bm.close()
+    # sort output json file by abs(NES)
+    logging.debug("Worker %s: sorting results" % (output_basename))
+    # make tmp dir for sorting
+    if os.path.exists(output_basename):
+        shutil.rmtree(output_basename)
+    os.makedirs(output_basename) 
+    # call batch sort python function
+    sorted_json_file = output_basename + JSON_SORTED_SUFFIX
+    batch_sort(input=unsorted_json_file,
+               output=sorted_json_file,
+               key=_cmp_json_nes,
+               buffer_size=SORT_BUFFER_SIZE,
+               tempdirs=[output_basename])
+    # remove tmp dir
+    shutil.rmtree(output_basename)
+    # remove unsorted json file
+    os.remove(unsorted_json_file)    
+    logging.debug("Worker %s: done" % (output_basename))
 
-def ssea_parallel(matrix_dir, shape, sample_sets, config, 
-                  output_hist_file, tmp_dir): 
+def ssea_map(matrix_dir, shape, sample_sets, config, tmp_dir): 
     '''
-    main SSEA loop (multiprocessing implementation)
+    parallel map step of SSEA run
     
-    See ssea_serial function for documentation
+    breaks input matrix into approximately equal sized chunks and 
+    coordinates execution of subprocesses to process each chunk
+    in parallel
+    
+    returns a list of worker process prefixes corresponding to
+    result chunks
     '''
     # start worker processes
     procs = []
     chunks = []
     worker_basenames = []
-    worker_hist_files = []
     for startrow,endrow in chunk(shape[0], config.num_processes):
         i = len(procs)
         logging.debug("Worker process %d range %d-%d (%d total rows)" % 
                       (i, startrow, endrow, (endrow-startrow)))
         # worker output files
         basename = os.path.join(tmp_dir, "w%03d" % (i))
-        hist_file = basename + '.hists.npz'
         worker_basenames.append(basename)
-        worker_hist_files.append(hist_file)
         args = (matrix_dir, shape, sample_sets, config, 
-                basename, hist_file, startrow, endrow)        
+                basename, startrow, endrow)        
         p = Process(target=ssea_serial, args=args)
         p.start()
         procs.append(p)
@@ -367,23 +390,10 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
     # join worker processes (wait for processes to finish)
     for p in procs:
         p.join()
-    # merge workers
-    logging.info("Merging %d worker histograms" % (len(procs)))
-    # setup global ES histograms
-    hists = _init_hists(len(sample_sets))
-    for i in xrange(len(procs)):        
-        # aggregate numpy arrays
-        npzfile = np.load(worker_hist_files[i])
-        for k in hists.iterkeys():
-            hists[k] += npzfile[k]
-        npzfile.close()
-    np.savez(output_hist_file, **hists)
-    # remove worker histograms
-    for filename in worker_hist_files:
-        os.remove(filename)
     return worker_basenames
 
-def _compute_fdr_worker(hists_file, input_json_file):
+
+def _compute_qvalues(hists_file, input_json_file):
     # load histogram data
     hists = np.load(hists_file)
     # compute cumulative sums for fdr interpolation
@@ -434,81 +444,121 @@ def _compute_fdr_worker(hists_file, input_json_file):
     # cleanup
     fin.close()
     hists.close()
+
+def compute_qvalues(json_iterator, hists_file, nsets):
+    '''
+    computes fdr q values from json Result objects sorted
+    by abs(NES) (low to high)
     
-def _compute_qvalues(nsets, input_json_file, output_json_file):
+    json_iterator: iterator that yields json objects in sorted order
+    hists_file: contains histogram data from null distribution
+    nsets: number of sample sets in analysis
+    '''
+    # load histogram data
+    hists = np.load(hists_file)
+    # compute cumulative sums for fdr interpolation
+    cdfs = {}
+    for k in ('null_nes_neg', 'null_nes_pos', 'obs_nes_neg', 'obs_nes_pos'):
+        h = hists[k]
+        cdf2d = np.zeros((h.shape[0],h.shape[1]+1), dtype=np.float)
+        for j in xrange(h.shape[0]):
+            cdf2d[j,1:] = h[j,:].cumsum()
+        cdfs[k] = cdf2d
+    # keep track of minimum FDR for each sample set for positive
+    # and negative NES separately
     min_pos_fdrs = np.ones(nsets, dtype=np.float)
     min_neg_fdrs = np.ones(nsets, dtype=np.float)
-    # parse report json and write new values
-    with open(output_json_file, 'w') as fout:
-        with open(input_json_file, 'r') as fin:
-            for line in fin:
-                # load json document (one per line)
-                res = Result.from_json(line.strip())
-                i = res.ss_id
-                min_fdrs = min_neg_fdrs if res.es < 0 else min_pos_fdrs
-                #print 'SS_ID=%d ES=%f NES=%f fdr=%f minfdr=%f' % (i, res.es, res.nes, res.ss_fdr_q_value, min_fdrs[i]) 
-                if res.ss_fdr_q_value < min_fdrs[i]:
-                    min_fdrs[i] = res.ss_fdr_q_value
-                else:
-                    res.ss_fdr_q_value = min_fdrs[i]
-                print >>fout, res.to_json()
-   
-def compute_qvalues_parallel(num_sample_sets, hists_file, input_basenames, 
-                             output_json_file):
-    '''
-    '''
-    def _sort_result_json(line):
-        '''comparison function for batch_sort'''
+    # perform merge of sorted json files 
+    for line in json_iterator:
+        # load json document (one per line)
         res = Result.from_json(line.strip())
-        return abs(res.nes)
+        # get relevant columns
+        i = res.ss_id
+        es = res.es
+        log_nes_clip = np.log10(np.clip(abs(res.nes), NES_MIN, NES_MAX))
+        # compute sample set FDR q-values
+        if es < 0:
+            null_key = 'null_nes_neg'
+            obs_key = 'obs_nes_neg'
+            min_fdrs = min_neg_fdrs
+        else:
+            null_key = 'null_nes_pos'
+            obs_key = 'obs_nes_pos'
+            min_fdrs = min_pos_fdrs
+        # to compute a sample set specific FDR q value we look at the
+        # aggregated enrichment scores for all tests of that sample set
+        # compute the cumulative sums of NES histograms
+        # use interpolation to find fraction NES(null) >= NES* and account for
+        # the observed permutation in the null set
+        # interpolate NES in log space
+        null_nes_cumsum = cdfs[null_key][i]
+        null_n = interp(log_nes_clip, LOG_NES_BINS, null_nes_cumsum)
+        obs_nes_cumsum = cdfs[obs_key][i]
+        obs_n = interp(log_nes_clip, LOG_NES_BINS, obs_nes_cumsum)
+        n = 1.0 - (null_n / null_nes_cumsum[-1])
+        d = 1.0 - (obs_n / obs_nes_cumsum[-1])
+        #print 'SS_ID=%d ES=%f NES=%f n=%f (%f / %f) d=%f (%f / %f)' % (i, res.es, res.nes, n, null_n, null_nes_cumsum[-1], d, obs_n, obs_nes_cumsum[-1])
+        # update json dict
+        if (n <= 0.0) or (d <= 0.0):
+            res.ss_fdr_q_value = 0.0
+        else:
+            res.ss_fdr_q_value = n / d
+        #print 'SS_ID=%d ES=%f NES=%f fdr=%f minfdr=%f' % (i, res.es, res.nes, res.ss_fdr_q_value, min_fdrs[i]) 
+        # compare with minimum FDR and adjust minimum FDR if necessary
+        if res.ss_fdr_q_value < min_fdrs[i]:
+            min_fdrs[i] = res.ss_fdr_q_value
+        else:
+            res.ss_fdr_q_value = min_fdrs[i]
+        # convert back to json
+        yield res.to_json()
+        yield os.linesep
+    # cleanup
+    hists.close()
 
-    def _worker(input_basename):
-        '''
-        parallel process to compute fdr values for single json result file
-        '''
-        # unsorted json file
-        input_json_file = input_basename + JSON_RAW_SUFFIX
-        stats_json_file = input_basename + JSON_STATS_SUFFIX
-        with open(stats_json_file, 'w') as fout:
-            for json_string in _compute_fdr_worker(hists_file, input_json_file):
-                print >>fout, json_string
-        # remove raw input file
-        os.remove(input_json_file)
-        # make tmp dir for sorting
-        if os.path.exists(input_basename):
-            shutil.rmtree(input_basename)
-        os.makedirs(input_basename) 
-        # sort by nes
-        sorted_json_file = input_basename + JSON_SORTED_SUFFIX
-        batch_sort(input=stats_json_file,
-                   output=sorted_json_file,
-                   key=_sort_result_json,
-                   buffer_size=SORT_BUFFER_SIZE,
-                   tempdirs=[input_basename])
-        # remove tmp dir
-        shutil.rmtree(input_basename)
-        # remove stats json file
-        os.remove(stats_json_file)
-    # start worker processes
-    procs = []
-    sorted_json_files = []
-    for i in xrange(len(input_basenames)):
-        p = Process(target=_worker, args=(input_basenames[i],))
-        p.start()
-        procs.append(p)
-        sorted_json_files.append(input_basenames[i] + JSON_SORTED_SUFFIX)
-    # wait for consumers to finish
-    for p in procs:
-        p.join()
+def ssea_reduce(input_basenames, num_sample_sets, output_json_file, 
+                output_hist_file):
+    '''
+    reduce step of SSEA run
+    
+    merges the null distribution histograms from individual worker
+    processes from the map step, and then merges the sorted results
+    json files from individual worker processes and computes global
+    fdr q-value statistics
+    '''
+    # merge NES histograms
+    logging.debug("Merging %d worker histograms" % (len(input_basenames)))
+    hists = _init_hists(num_sample_sets)
+    json_iterables = []
+    for i in xrange(len(input_basenames)):        
+        # create sorted json file streams
+        json_file = input_basenames[i] + JSON_SORTED_SUFFIX
+        json_fileh = open(json_file, 'rb', 64*1024)
+        json_iterables.append(json_fileh)
+        # aggregate numpy arrays
+        hist_file = input_basenames[i] + NPY_HISTS_SUFFIX
+        npzfile = np.load(hist_file)
+        for k in hists.iterkeys():
+            hists[k] += npzfile[k]
+        npzfile.close()
+    np.savez(output_hist_file, **hists)
     # perform merge of sorted json files
-    merged_json_file = output_json_file + '.raw'
-    batch_merge(sorted_json_files, merged_json_file, key=_sort_result_json)
-    # remove individual json files
-    for f in sorted_json_files:
-        os.remove(f)
-    # perform final iteration to compute q values
-    _compute_qvalues(num_sample_sets, merged_json_file, output_json_file)
-    os.remove(merged_json_file)
+    try:
+        with open(output_json_file, 'wb', 64*1024) as output:
+            iterator = batch_merge(_cmp_json_nes, *json_iterables)
+            output.writelines(compute_qvalues(iterator, output_hist_file, num_sample_sets))
+    finally:
+        for iterable in json_iterables:
+            try:
+                iterable.close()
+            except Exception:
+                pass
+    # remove worker files
+    logging.debug("Removing temporary files")
+    for i in xrange(len(input_basenames)):        
+        hist_file = input_basenames[i] + NPY_HISTS_SUFFIX
+        os.remove(hist_file)
+        json_file = input_basenames[i] + JSON_SORTED_SUFFIX
+        os.remove(json_file)
 
 def ssea_main(config, sample_sets, row_metadata, col_metadata):
     '''
@@ -554,19 +604,17 @@ def ssea_main(config, sample_sets, row_metadata, col_metadata):
     with open(config_file, 'w') as fp:
         print >>fp, config.to_json()
     # output files
-    es_hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
-    shape = (len(row_metadata),len(col_metadata))
-    logging.info("Running SSEA in parallel with %d processes" % 
+    logging.info("Running SSEA with %d available processes" % 
                  (config.num_processes))
-    worker_basenames = ssea_parallel(config.matrix_dir, shape, 
-                                     sample_sets, config,
-                                     es_hists_file, tmp_dir)
+    shape = (len(row_metadata),len(col_metadata))
+    worker_basenames = ssea_map(config.matrix_dir, shape, sample_sets, 
+                                config, tmp_dir)
     # use ES null distributions to compute global statistics
     # and produce a report
     logging.info("Computing FDR q values")
+    hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
     json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
-    compute_qvalues_parallel(len(sample_sets), es_hists_file, worker_basenames, 
-                             json_file) 
+    ssea_reduce(worker_basenames, len(sample_sets), json_file, hists_file)
     # cleanup
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)

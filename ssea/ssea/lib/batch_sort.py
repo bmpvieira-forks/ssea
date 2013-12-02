@@ -15,7 +15,7 @@ import heapq
 
 Keyed = namedtuple("Keyed", ["key", "obj"])
 
-def merge(key=None, *iterables):
+def batch_merge(key=None, *iterables):
     # based on code posted by Scott David Daniels in c.l.p.
     # http://groups.google.com/group/comp.lang.python/msg/484f01f1ea3c832d
 
@@ -49,28 +49,12 @@ def batch_sort(input, output, key=None, buffer_size=32000, tempdirs=None):
                 output_chunk.flush()
                 output_chunk.seek(0)
         with open(output,'wb',64*1024) as output_file:
-            output_file.writelines(merge(key, *chunks))
+            output_file.writelines(batch_merge(key, *chunks))
     finally:
         for chunk in chunks:
             try:
                 chunk.close()
                 os.remove(chunk.name)
-            except Exception:
-                pass
-
-def batch_merge(input_files, output_file, key=None):
-    chunks = []
-    fileh = None
-    try:
-        for input_file in input_files:
-            output_chunk = open(input_file, 'rb', 64*1024)
-            chunks.append(output_chunk)
-        with open(output_file, 'wb', 64*1024) as fileh:
-            fileh.writelines(merge(key, *chunks))
-    finally:
-        for chunk in chunks:
-            try:
-                chunk.close()
             except Exception:
                 pass
 
