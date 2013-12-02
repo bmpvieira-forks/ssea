@@ -86,7 +86,7 @@ def db_import(input_dir, name, host):
     logging.debug("Importing config file %s" % (config_json_file))
     p = subprocess.call(['mongoimport', '-c', 'config', '--file', config_json_file, '--host', host,  '-d', name])
     logging.debug("Importing result file %s" % (results_json_file))
-    p1 = subprocess.Popen(['zcat', results_json_file], stdout=subprocess.PIPE)
+    p1 = subprocess.Popen(['cat', results_json_file], stdout=subprocess.PIPE)
     p2 = subprocess.Popen(['mongoimport', '-c', 'reports', '--host', host, '-d', name], stdin=p1.stdout)
     p1.wait()
     p2.wait()

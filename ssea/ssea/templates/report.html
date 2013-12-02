@@ -40,13 +40,10 @@ $(document).ready(function() {
     <th>Metadata: {{ key }}</th>
 {% endfor %}
 <th>ES</th>
+<th>NES</th>
 <th>NOM p-val</th>
-<th>T NES</th>
-<th>T FDR q-val</th>
-<th>SS NES</th>
+<th>FDR q-val</th>
 <th>SS FDR q-val</th>
-<th>GLOBAL NES</th>
-<th>GLOBAL FDR q-val</th>
 <th>ES Rank</th>
 <th>Core hits</th>
 <th>Core misses</th>
@@ -74,13 +71,10 @@ $(document).ready(function() {
     <td>{{ res.params[key] }}</td>
 {% endfor %}
 <td>{{ res.es }}</td>
-<td>{{ res.nominal_p_value }}</td>
 <td>{{ res.nes }}</td>
+<td>{{ res.nominal_p_value }}</td>
 <td>{{ res.fdr_q_value }}</td>
-<td>{{ res.ss_nes }}</td>
 <td>{{ res.ss_fdr_q_value }}</td>
-<td>{{ res.global_nes }}</td>
-<td>{{ res.global_fdr_q_value }}</td>
 <td>{{ res.es_rank }}</td>
 <td>{{ res.core_hits }}</td>
 <td>{{ res.core_misses }}</td>

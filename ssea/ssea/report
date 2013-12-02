@@ -1,3 +1,5 @@
+#!/bin/env python2.7
+# encoding: utf-8
 '''
 Created on Oct 29, 2013
 
@@ -6,7 +8,6 @@ Created on Oct 29, 2013
 import sys
 import os
 import argparse
-import gzip
 import logging
 import shutil
 import re
@@ -27,7 +28,7 @@ from matplotlib import figure
 # local imports
 from ssea import __version__, __date__, __updated__
 from ssea.kernel import ssea_kernel, RandomState
-from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet, hist_quantile
+from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet
 from countdata import BigCountMatrix
 
 # setup path to web files
@@ -386,7 +387,7 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
 def parse_and_filter_results(filename, thresholds):
     passed = 0
     failed = 0    
-    with gzip.open(filename, 'rb') as fin:
+    with open(filename, 'r') as fin:
         for line in fin:
             # load json document (one per line)
             result = Result.from_json(line.strip())      

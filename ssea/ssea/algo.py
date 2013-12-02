@@ -6,18 +6,26 @@ Created on Oct 9, 2013
 import os
 import logging
 import subprocess
+import shutil
 from collections import namedtuple
 from multiprocessing import Process
 import numpy as np
 
 # local imports
 import ssea.cfisher as fisher
+
+from ssea.lib.batch_sort import batch_sort, batch_merge
 from ssea.kernel import ssea_kernel, RandomState
 from base import BOOL_DTYPE, Config, Result, chunk, interp
 from countdata import BigCountMatrix
 
 # results directories
 TMP_DIR = 'tmp'
+
+# temporary files
+JSON_RAW_SUFFIX = '.raw.json'
+JSON_STATS_SUFFIX = '.stats.json'
+JSON_SORTED_SUFFIX = '.stats.sorted.json'
 
 # improves readability of code
 KernelResult = namedtuple('KernelResult', ('ranks',
@@ -30,61 +38,38 @@ KernelResult = namedtuple('KernelResult', ('ranks',
 
 RunResult = namedtuple('RunResult', ('sample_set_index',
                                      'result',
-                                     'null_es',
                                      'null_nes',
-                                     'resample_es',
                                      'resample_nes'))
+
+# batch sort configuration
+SORT_BUFFER_SIZE = 32000
 
 # floating point precision to output in report
 FLOAT_PRECISION = 10
 P_VALUE_PRECISION = 200
 
-# to provide a means of comparing transcript performance within a single
-# set we provide a sample set FDR q value statistic compute from the 
-# distribution of observed and null enrichment scores (ES) observed for
-# all transcripts within a single sample set. we accomplish this storing 
-# a histogram of ES values for each sample set during runtime and then 
-# merging histograms from parallel processes prior to computing the
-# per-sample-set FDR q values. the ES ranges from [-1.0, +1.0] so we 
-# use linear histogram bins to store these values.
-NUM_ES_BINS = 10001
-ES_BINS_NEG = np.linspace(-1.0, 0.0, num=NUM_ES_BINS)
-ES_BINS_POS = np.linspace(0.0, 1.0, num=NUM_ES_BINS)
-ES_BIN_CENTERS_NEG = (ES_BINS_NEG[:-1] + ES_BINS_NEG[1:]) / 2.
-ES_BIN_CENTERS_POS = (ES_BINS_POS[:-1] + ES_BINS_POS[1:]) / 2.  
-
-# to compute global FDR q values we need to store normalized enrichment 
+# to compute FDR q values we need to store normalized enrichment 
 # scores (NES). we accomplish this storing a histogram of NES values during
 # runtime and then merging histograms from parallel processes prior to 
 # computing global statistics. the NES can range from [-inf, +inf] making
 # it difficult for a histogram to store enough granularity in few bins.
 # we accomplish this here by using log-space histogram bins that vary from
 # 0.1 to 100. values outside this range are clipped and stored so that no
-# values are lost 
+# values are lost
 NUM_NES_BINS = 10001
-NES_BINS_POS = np.logspace(-1,2,num=NUM_NES_BINS,base=10)
-NES_BINS_NEG = -1.0 * np.logspace(-1,2,num=NUM_NES_BINS,base=10)[::-1]
-LOG_NES_BINS_POS = np.log10(NES_BINS_POS)
-LOG_NES_BINS_NEG = -np.log10(-NES_BINS_NEG)
-LOG_NES_BIN_CENTERS_POS = (np.log10(NES_BINS_POS[:-1]) + np.log10(NES_BINS_POS[1:])) / 2
-LOG_NES_BIN_CENTERS_NEG = -((np.log10(-NES_BINS_NEG[:-1]) + np.log10(-NES_BINS_NEG[1:])) / 2)
-NES_BIN_CENTERS_POS = 10.0 ** LOG_NES_BIN_CENTERS_POS
-NES_BIN_CENTERS_NEG = -10.0 ** (-LOG_NES_BIN_CENTERS_NEG)
-NES_NEG_MIN = NES_BINS_NEG[0]
-NES_NEG_MAX = NES_BINS_NEG[-1]
-NES_POS_MIN = NES_BINS_POS[0]
-NES_POS_MAX = NES_BINS_POS[-1]
+NES_BINS = np.logspace(-1,2,num=NUM_NES_BINS,base=10)
+LOG_NES_BINS = np.log10(NES_BINS)
+NES_MIN = NES_BINS[0]
+NES_MAX = NES_BINS[-1]
+#LOG_NES_BIN_CENTERS = (np.log10(NES_BINS[:-1]) + np.log10(NES_BINS[1:])) / 2
+#NES_BIN_CENTERS = 10.0 ** LOG_NES_BIN_CENTERS
 
 def _init_hists(nsets):
     '''returns a dictionary with histogram arrays initialized to zero'''
-    return {'null_es_pos': np.zeros((nsets,NUM_ES_BINS-1), dtype=np.float),
-            'null_es_neg': np.zeros((nsets,NUM_ES_BINS-1), dtype=np.float),
-            'obs_es_pos': np.zeros((nsets,NUM_ES_BINS-1), dtype=np.float),
-            'obs_es_neg': np.zeros((nsets,NUM_ES_BINS-1), dtype=np.float),
-            'null_nes_pos': np.zeros(NUM_NES_BINS-1, dtype=np.float),
-            'null_nes_neg': np.zeros(NUM_NES_BINS-1, dtype=np.float),
-            'obs_nes_pos': np.zeros(NUM_NES_BINS-1, dtype=np.float),
-            'obs_nes_neg': np.zeros(NUM_NES_BINS-1, dtype=np.float)}
+    return {'null_nes_pos': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float),
+            'null_nes_neg': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float),
+            'obs_nes_pos': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float),
+            'obs_nes_neg': np.zeros((nsets,NUM_NES_BINS-1), dtype=np.float)}
 
 def ssea_run(counts, size_factors, membership, rng, config):
     '''
@@ -164,10 +149,6 @@ def ssea_run(counts, size_factors, membership, rng, config):
         null_nes_neg = null_es_neg / np.fabs(null_es_neg_means)
         null_nes_vals[:,es_neg_inds] = null_nes_neg
         null_nes_neg_count = null_nes_neg.count()
-        # To compute FWER create a histogram of the maximum NES(S,null) 
-        # over all S for each of the permutations by using the positive 
-        # or negative values corresponding to the sign of the observed NES(S). 
-        null_nes_min = null_nes_neg.min(axis=1).compressed()
         # Normalize the observed ES(S) by rescaling by the mean of
         # the ES(S,null) separately for positive and negative ES(S)
         obs_nes_neg = (np.ma.MaskedArray(es_vals[es_neg_inds]) / 
@@ -190,14 +171,13 @@ def ssea_run(counts, size_factors, membership, rng, config):
     if len(es_pos_inds) > 0:
         # mask negative scores 
         null_es_pos = np.ma.masked_less_equal(null_es_vals[:,es_pos_inds], 0)
-        # normalize
+        # Normalize null ES
         null_es_pos_means = null_es_pos.mean(axis=0)
         null_es_means[es_pos_inds] = null_es_pos_means        
         null_nes_pos = null_es_pos / np.fabs(null_es_pos_means)
         null_nes_vals[:,es_pos_inds] = null_nes_pos
         null_nes_pos_count = null_nes_pos.count()
-        # store max NES for FWER calculation
-        null_nes_max = null_nes_pos.max(axis=1).compressed()
+        # Normalize the observed ES(S)
         obs_nes_pos = (np.ma.MaskedArray(es_vals[es_pos_inds]) / 
                        np.fabs(null_es_pos_means))
         obs_nes_pos_count = obs_nes_pos.count()
@@ -210,7 +190,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
         ppos = 1.0 + (null_es_pos >= es_vals[es_pos_inds]).sum(axis=0)
         ppos = ppos / (1.0 + null_es_pos.count(axis=0).astype(np.float))
         pvals[es_pos_inds] = ppos
-    # Control for multiple hypothesis testing and summarize results
+    # Control for multiple hypothesis testing
+    fdr_q_values = np.empty(membership.shape[1], dtype=np.float)
     for j in xrange(membership.shape[1]):
         # For a given NES(S) = NES* >= 0, the FDR is the ratio of the 
         # percentage of all permutations NES(S,null) >= 0, whose 
@@ -223,24 +204,47 @@ def ssea_run(counts, size_factors, membership, rng, config):
         # respectively 
         nes = nes_vals[j]
         if np.sign(es_vals[j]) < 0:
-            n = (1+(null_nes_neg <= nes).sum()) / (1+float(null_nes_neg_count))
-            d = (obs_nes_neg <= nes).sum() / float(obs_nes_neg_count)
-            fwerp = (1+(null_nes_min <= nes).sum()) / (1+float(len(null_nes_min)))
+            if null_nes_neg_count == 0:
+                n = 0
+            else:
+                n = (null_nes_neg <= nes).sum() / float(null_nes_neg_count)
+            if obs_nes_neg_count == 0:
+                d = 0
+            else:
+                d = (obs_nes_neg <= nes).sum() / float(obs_nes_neg_count) 
         else:
-            n = (1+(null_nes_pos >= nes).sum()) / (1+float(null_nes_pos_count))
-            d = (obs_nes_pos >= nes).sum() / float(obs_nes_pos_count)
-            fwerp = (1+(null_nes_max >= nes).sum()) / (1+float(len(null_nes_max)))
-        fdr_q_value = n / d
-        fwer_p_value = fwerp
-        # Create result object for this SSEA test
+            if null_nes_pos_count == 0:
+                n = 0
+            else:
+                n = (null_nes_pos >= nes).sum() / float(null_nes_pos_count)
+            if obs_nes_pos_count == 0:
+                d = 0
+            else:
+                d = (obs_nes_pos >= nes).sum() / float(obs_nes_pos_count)
+        if (n == 0) or (d == 0):
+            fdr_q_values[j] = 0.0
+        else:
+            fdr_q_values[j] = n / d
+    # q value is defined as the minimum FDR for which a test can be called
+    # significant. to compute q values iterate over sample sets sorted by
+    # NES and assign q values to either the minimum FDR previous seen or 
+    # the current FDR, whichever is lesser.
+    min_sign_fdr = [1.0, 1.0]
+    for j in np.argsort(np.fabs(nes_vals)):
+        ispos = 0 if es_vals[j] < 0 else 1
+        if fdr_q_values[j] < min_sign_fdr[ispos]:
+            min_sign_fdr[ispos] = fdr_q_values[j]
+        else:
+            fdr_q_values[j] = min_sign_fdr[ispos]
+    # Create result objects for this SSEA test
+    for j in xrange(membership.shape[1]):            
         res = Result()
         res.rand_seed = rand_seed
         res.es = round(es_vals[j], FLOAT_PRECISION)
         res.es_rank = int(es_ranks[j])
         res.nominal_p_value = round(pvals[j], P_VALUE_PRECISION)
         res.nes = round(nes_vals[j], FLOAT_PRECISION)
-        res.fdr_q_value = round(fdr_q_value, P_VALUE_PRECISION)
-        res.fwer_p_value = round(fwer_p_value, P_VALUE_PRECISION)
+        res.fdr_q_value = round(fdr_q_values[j], P_VALUE_PRECISION)
         # save some of the resampled es points 
         res.resample_es_vals = np.around(resample_es_vals[:Config.MAX_ES_POINTS,j], FLOAT_PRECISION)
         res.resample_es_ranks = resample_es_ranks[:Config.MAX_ES_POINTS,j]
@@ -283,13 +287,13 @@ def ssea_run(counts, size_factors, membership, rng, config):
         res.null_misses = int(null_misses)
         res.fisher_p_value = np.round(fisher_p_value, P_VALUE_PRECISION)
         res.odds_ratio = odds_ratio
-        # return null distributions for global fdr calculation
+        # return null distributions for subsequent fdr calculations
         yield RunResult(j, res, 
-                        null_es_vals[:,j], null_nes_vals[:,j],
-                        resample_es_vals[:,j], resample_nes_vals[:,j])
+                        null_nes_vals[:,j],
+                        resample_nes_vals[:,j])
 
 def ssea_serial(matrix_dir, shape, sample_sets, config, 
-                output_json_file, output_hist_file, 
+                output_basename, output_hist_file, 
                 startrow=None, endrow=None):
     '''
     main SSEA loop (single processor)
@@ -314,6 +318,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     # setup global ES histograms
     hists = _init_hists(len(sample_sets))
     # setup report file
+    output_json_file = output_basename + JSON_RAW_SUFFIX
     outfileh = open(output_json_file, 'wb')    
     for i in xrange(startrow, endrow):
         logging.debug("\tRow: %d (%d-%d)" % (i, startrow, endrow))
@@ -337,25 +342,22 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
             result.ss_id = j
             # convert to json
             print >>outfileh, result.to_json()
-            # update ES histograms
+            # update NES histograms
+            null_keys = []
+            obs_keys = []
             if result.es <= 0:
-                hists['null_es_neg'][j] += np.histogram(tup.null_es, ES_BINS_NEG)[0]
-                hists['obs_es_neg'][j] += np.histogram(result.es, ES_BINS_NEG)[0]      
-                # TODO: add the resampled values here?          
-                #hists['obs_es_neg'][j] += np.histogram(tup.resample_es, ES_BINS_NEG)[0]
-                hists['null_nes_neg'] += np.histogram(tup.null_nes.clip(NES_NEG_MIN,NES_NEG_MAX), NES_BINS_NEG)[0]
-                hists['obs_nes_neg'] += np.histogram(np.clip(result.nes, NES_NEG_MIN, NES_NEG_MAX), NES_BINS_NEG)[0]                
-                # TODO: add the resampled values here?          
-                #hists['obs_nes_neg'] += np.histogram(np.clip(tup.resample_nes, NES_NEG_MIN, NES_NEG_MAX), NES_BINS_NEG)[0]                
+                null_keys.append('null_nes_neg')
+                obs_keys.append('obs_nes_neg')
             if result.es >= 0:
-                hists['null_es_pos'][j] += np.histogram(tup.null_es, ES_BINS_POS)[0]        
-                hists['obs_es_pos'][j] += np.histogram(result.es, ES_BINS_POS)[0]
-                # TODO: add the resampled values here?          
-                #hists['obs_es_pos'][j] += np.histogram(tup.resample_es, ES_BINS_POS)[0]
-                hists['null_nes_pos'] += np.histogram(tup.null_nes.clip(NES_POS_MIN,NES_POS_MAX), NES_BINS_POS)[0]
-                # TODO: add the resampled values here?          
-                #hists['obs_nes_pos'] += np.histogram(np.clip(result.nes, NES_POS_MIN, NES_POS_MAX), NES_BINS_POS)[0]
-                hists['obs_nes_pos'] += np.histogram(np.clip(tup.resample_nes, NES_POS_MIN, NES_POS_MAX), NES_BINS_POS)[0]                
+                null_keys.append('null_nes_pos')
+                obs_keys.append('obs_nes_pos')
+            for k in xrange(len(null_keys)):
+                null_nes = np.clip(np.fabs(tup.null_nes), NES_MIN, NES_MAX)
+                obs_nes = np.clip(np.fabs(result.nes), NES_MIN, NES_MAX)
+                # TODO: use resampled nes?
+                # obs_nes = np.clip(np.fabs(tup.resample_nes), NES_MIN, NES_MAX)
+                hists[null_keys[k]][j] += np.histogram(null_nes, NES_BINS)[0]
+                hists[obs_keys[k]][j] += np.histogram(obs_nes, NES_BINS)[0]
     # close report file
     outfileh.close()
     # save histograms to a file
@@ -364,27 +366,28 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
     bm.close()
 
 def ssea_parallel(matrix_dir, shape, sample_sets, config, 
-                  worker_json_files, output_hist_file): 
+                  output_hist_file, tmp_dir): 
     '''
     main SSEA loop (multiprocessing implementation)
     
     See ssea_serial function for documentation
     '''
     # start worker processes
-    tmp_dir = os.path.join(config.output_dir, TMP_DIR)
     procs = []
     chunks = []
+    worker_basenames = []
     worker_hist_files = []
-    # divide matrix rows across processes
     for startrow,endrow in chunk(shape[0], config.num_processes):
         i = len(procs)
         logging.debug("Worker process %d range %d-%d (%d total rows)" % 
                       (i, startrow, endrow, (endrow-startrow)))
         # worker output files
-        hist_file = os.path.join(tmp_dir, "w%03d_hists.npz" % (i))
+        basename = os.path.join(tmp_dir, "w%03d" % (i))
+        hist_file = basename + '.hists.npz'
+        worker_basenames.append(basename)
         worker_hist_files.append(hist_file)
         args = (matrix_dir, shape, sample_sets, config, 
-                worker_json_files[i], hist_file, startrow, endrow)        
+                basename, hist_file, startrow, endrow)        
         p = Process(target=ssea_serial, args=args)
         p.start()
         procs.append(p)
@@ -406,139 +409,134 @@ def ssea_parallel(matrix_dir, shape, sample_sets, config,
     # remove worker histograms
     for filename in worker_hist_files:
         os.remove(filename)
+    return worker_basenames
 
-def compute_global_stats_worker(hists_file, input_json_file):
+def _compute_fdr_worker(hists_file, input_json_file):
     # load histogram data
     hists = np.load(hists_file)
-    # compute per-sample-set means
-    null_es_pos_counts = hists['null_es_pos'].sum(axis=1)
-    null_es_neg_counts = hists['null_es_neg'].sum(axis=1)
-    null_es_neg_masses = (hists['null_es_neg'] * ES_BIN_CENTERS_NEG).sum(axis=1)
-    null_es_pos_masses = (hists['null_es_pos'] * ES_BIN_CENTERS_POS).sum(axis=1)
-    null_es_neg_means = np.fabs(null_es_neg_masses / null_es_neg_counts.clip(1.0))
-    null_es_pos_means = np.fabs(null_es_pos_masses / null_es_pos_counts.clip(1.0))
-    # compute global means    
-    null_nes_pos_counts = hists['null_nes_pos'].sum()
-    null_nes_neg_counts = hists['null_nes_neg'].sum()
-    null_nes_neg_mean = np.fabs((hists['null_nes_neg'] * NES_BIN_CENTERS_NEG).sum() / 
-                                null_nes_neg_counts)
-    null_nes_pos_mean = np.fabs((hists['null_nes_pos'] * NES_BIN_CENTERS_POS).sum() / 
-                                null_nes_pos_counts)
     # compute cumulative sums for fdr interpolation
     cdfs = {}
-    for k in ('null_es_neg', 'null_es_pos', 'obs_es_neg', 'obs_es_pos'):
+    for k in ('null_nes_neg', 'null_nes_pos', 'obs_nes_neg', 'obs_nes_pos'):
         h = hists[k]
         cdf2d = np.zeros((h.shape[0],h.shape[1]+1), dtype=np.float)
         for j in xrange(h.shape[0]):
             cdf2d[j,1:] = h[j,:].cumsum()
         cdfs[k] = cdf2d
-    for k in ('null_nes_neg', 'null_nes_pos', 'obs_nes_neg', 'obs_nes_pos'):
-        h = hists[k]
-        cdf = np.zeros(h.shape[0]+1, dtype=np.float)
-        cdf[1:] = h.cumsum()
-        cdfs[k] = cdf
     # parse report json and write new values
     fin = open(input_json_file, 'r')
-    fmin2 = lambda a, b: b if a < b else a
-    fmax2 = lambda a, b: b if a > b else a
     for line in fin:
         # load json document (one per line)
         res = Result.from_json(line.strip())
         # get relevant columns
         i = res.ss_id
         es = res.es
-        nes = res.nes
-        # compute sample set and global NES and FDR q-values
+        log_nes_clip = np.log10(np.clip(abs(res.nes), NES_MIN, NES_MAX))
+        # compute sample set FDR q-values
         if es < 0:
-            # the NES adjusts the ES by dividing by the mean of the
-            # null permutation ES
-            if null_es_neg_means[i] == 0:
-                ss_nes = 0.0
-            else:
-                ss_nes = es / null_es_neg_means[i]
-            if null_nes_neg_mean == 0:
-                global_nes = 0.0
-            else:
-                global_nes = nes / null_nes_neg_mean                
-            # to compute a sample set specific FDR q value we look at the
-            # aggregated enrichment scores for all tests of that sample set
-            # compute the cumulative sums of ES histograms
-            # use interpolation to find fraction ES(null) <= ES* and account for
-            # the observed permutation in the null set
-            null_es_cumsum = cdfs['null_es_neg'][i]
-            ss_null_n = 1 + interp(es, ES_BINS_NEG, null_es_cumsum)
-            ss_null_d = 1 + null_es_cumsum[-1]
-            obs_es_cumsum = cdfs['obs_es_neg'][i]
-            ss_obs_n = fmin2(interp(es, ES_BINS_NEG, obs_es_cumsum), 1.0)
-            ss_obs_d = obs_es_cumsum[-1]
-            ss_n = (ss_null_n / ss_null_d)
-            ss_d = (ss_obs_n / ss_obs_d)
-            # clip the observed NES to fit within the bins (so we can take the log)
-            # and interpolate in log space for NES because bins are in log space
-            log_nes_clip = -1.0 * np.log10(-np.clip(nes, NES_NEG_MIN, NES_NEG_MAX))
-            global_null_n = 1 + interp(log_nes_clip, LOG_NES_BINS_NEG, cdfs['null_nes_neg'])
-            global_null_d = 1 + cdfs['null_nes_neg'][-1]
-            global_obs_n = fmin2(interp(log_nes_clip, LOG_NES_BINS_NEG, cdfs['obs_nes_neg']), 1.0)
-            global_obs_d = cdfs['obs_nes_neg'][-1]
-            global_n = (global_null_n / global_null_d)
-            global_d = (global_obs_n / global_obs_d)
+            null_key = 'null_nes_neg'
+            obs_key = 'obs_nes_neg'
         else:
-            # see comments above for negative ES
-            if null_es_pos_means[i] == 0:
-                ss_nes = 0.0
-            else:
-                ss_nes = es / null_es_pos_means[i]
-            if null_nes_pos_mean == 0:
-                global_nes = 0.0
-            else:
-                global_nes = nes / null_nes_pos_mean
-            # use interpolation to find fraction ES(null) >= ES* and
-            # ES(observed) >= ES* and account for observed permutation in 
-            # the null set
-            null_es_cumsum = cdfs['null_es_pos'][i]
-            ss_null_n = interp(es, ES_BINS_POS, null_es_cumsum)
-            ss_null_d = 1.0 + null_es_cumsum[-1]
-            obs_es_cumsum = cdfs['obs_es_pos'][i]
-            ss_obs_n = fmax2(interp(es, ES_BINS_POS, obs_es_cumsum), obs_es_cumsum[-1] - 1)
-            ss_obs_d = obs_es_cumsum[-1]
-            ss_n = 1.0 - (ss_null_n / ss_null_d)
-            ss_d = 1.0 - (ss_obs_n / ss_obs_d)
-            # interpolate NES in log space
-            log_nes_clip = np.log10(np.clip(nes, NES_POS_MIN, NES_POS_MAX))
-            global_null_n = interp(log_nes_clip, LOG_NES_BINS_POS, cdfs['null_nes_pos'])
-            global_null_d = 1.0 + cdfs['null_nes_pos'][-1]
-            global_obs_n = fmax2(interp(log_nes_clip, LOG_NES_BINS_POS, cdfs['obs_nes_pos']), obs_es_cumsum[-1] - 1)
-            global_obs_d = cdfs['obs_nes_pos'][-1]
-            global_n = 1.0 - (global_null_n / global_null_d)
-            global_d = 1.0 - (global_obs_n / global_obs_d)
-        #print 'ES=%f NES=%f ss_n=%f (%f / %f) ss_d=%f (%f / %f) g_n=%f (%f / %f) g_d=%f (%f / %f)' % (es, nes, ss_n, ss_null_n, ss_null_d, ss_d, ss_obs_n, ss_obs_d, global_n, global_null_n, global_null_d, global_d, global_obs_n, global_obs_d)
-        ss_fdr_q_value = ss_n / ss_d
-        global_fdr_q_value = global_n / global_d
+            null_key = 'null_nes_pos'
+            obs_key = 'obs_nes_pos'
+        # to compute a sample set specific FDR q value we look at the
+        # aggregated enrichment scores for all tests of that sample set
+        # compute the cumulative sums of NES histograms
+        # use interpolation to find fraction NES(null) >= NES* and account for
+        # the observed permutation in the null set
+        # interpolate NES in log space
+        null_nes_cumsum = cdfs[null_key][i]
+        null_n = interp(log_nes_clip, LOG_NES_BINS, null_nes_cumsum)
+        obs_nes_cumsum = cdfs[obs_key][i]
+        obs_n = interp(log_nes_clip, LOG_NES_BINS, obs_nes_cumsum)
+        n = 1.0 - (null_n / null_nes_cumsum[-1])
+        d = 1.0 - (obs_n / obs_nes_cumsum[-1])
+        #print 'SS_ID=%d ES=%f NES=%f n=%f (%f / %f) d=%f (%f / %f)' % (i, res.es, res.nes, n, null_n, null_nes_cumsum[-1], d, obs_n, obs_nes_cumsum[-1])
+        if (n <= 0.0) or (d <= 0.0):
+            ss_fdr_q_value = 0.0
+        else:
+            ss_fdr_q_value = n / d
         # update json dict
-        res.ss_nes = ss_nes
-        res.global_nes = global_nes
         res.ss_fdr_q_value = ss_fdr_q_value
-        res.global_fdr_q_value = global_fdr_q_value
         # convert back to json
         yield res.to_json()
     # cleanup
     fin.close()
     hists.close()
     
-def compute_global_stats_parallel(hists_file, input_json_files, output_json_files):
-    def _worker(input_json_file, output_json_file):
-        with open(output_json_file, 'w') as fout:
-            for json_string in compute_global_stats_worker(hists_file, input_json_file):
+def _compute_qvalues(nsets, input_json_file, output_json_file):
+    min_pos_fdrs = np.ones(nsets, dtype=np.float)
+    min_neg_fdrs = np.ones(nsets, dtype=np.float)
+    # parse report json and write new values
+    with open(output_json_file, 'w') as fout:
+        with open(input_json_file, 'r') as fin:
+            for line in fin:
+                # load json document (one per line)
+                res = Result.from_json(line.strip())
+                i = res.ss_id
+                min_fdrs = min_neg_fdrs if res.es < 0 else min_pos_fdrs
+                #print 'SS_ID=%d ES=%f NES=%f fdr=%f minfdr=%f' % (i, res.es, res.nes, res.ss_fdr_q_value, min_fdrs[i]) 
+                if res.ss_fdr_q_value < min_fdrs[i]:
+                    min_fdrs[i] = res.ss_fdr_q_value
+                else:
+                    res.ss_fdr_q_value = min_fdrs[i]
+                print >>fout, res.to_json()
+   
+def compute_qvalues_parallel(num_sample_sets, hists_file, input_basenames, 
+                             output_json_file):
+    '''
+    '''
+    def _sort_result_json(line):
+        '''comparison function for batch_sort'''
+        res = Result.from_json(line.strip())
+        return abs(res.nes)
+
+    def _worker(input_basename):
+        '''
+        parallel process to compute fdr values for single json result file
+        '''
+        # unsorted json file
+        input_json_file = input_basename + JSON_RAW_SUFFIX
+        stats_json_file = input_basename + JSON_STATS_SUFFIX
+        with open(stats_json_file, 'w') as fout:
+            for json_string in _compute_fdr_worker(hists_file, input_json_file):
                 print >>fout, json_string
+        # remove raw input file
+        os.remove(input_json_file)
+        # make tmp dir for sorting
+        if os.path.exists(input_basename):
+            shutil.rmtree(input_basename)
+        os.makedirs(input_basename) 
+        # sort by nes
+        sorted_json_file = input_basename + JSON_SORTED_SUFFIX
+        batch_sort(input=stats_json_file,
+                   output=sorted_json_file,
+                   key=_sort_result_json,
+                   buffer_size=SORT_BUFFER_SIZE,
+                   tempdirs=[input_basename])
+        # remove tmp dir
+        shutil.rmtree(input_basename)
+        # remove stats json file
+        os.remove(stats_json_file)
     # start worker processes
     procs = []
-    for i in xrange(len(input_json_files)):
-        p = Process(target=_worker, args=(input_json_files[i], output_json_files[i]))
+    sorted_json_files = []
+    for i in xrange(len(input_basenames)):
+        p = Process(target=_worker, args=(input_basenames[i],))
         p.start()
         procs.append(p)
+        sorted_json_files.append(input_basenames[i] + JSON_SORTED_SUFFIX)
     # wait for consumers to finish
     for p in procs:
         p.join()
+    # perform merge of sorted json files
+    merged_json_file = output_json_file + '.raw'
+    batch_merge(sorted_json_files, merged_json_file, key=_sort_result_json)
+    # remove individual json files
+    for f in sorted_json_files:
+        os.remove(f)
+    # perform final iteration to compute q values
+    _compute_qvalues(num_sample_sets, merged_json_file, output_json_file)
+    os.remove(merged_json_file)
 
 def ssea_main(config, sample_sets, row_metadata, col_metadata):
     '''
@@ -585,43 +583,19 @@ def ssea_main(config, sample_sets, row_metadata, col_metadata):
         print >>fp, config.to_json()
     # output files
     es_hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
-    worker_json_files = []
-    worker_json_stats_files = []
-    for i in xrange(config.num_processes):
-        # worker output files
-        json_file = os.path.join(tmp_dir, "w%03d.json" % (i))
-        json_stats_file = os.path.join(tmp_dir, "w%03d.stats.json" % (i))
-        worker_json_files.append(json_file)
-        worker_json_stats_files.append(json_stats_file)
     shape = (len(row_metadata),len(col_metadata))
-    if config.num_processes > 1:
-        logging.info("Running SSEA in parallel with %d processes" % 
-                     (config.num_processes))
-        ssea_parallel(config.matrix_dir, shape, 
-                      sample_sets, config,
-                      worker_json_files, 
-                      es_hists_file)
-    else:
-        logging.info("Running SSEA in serial")
-        ssea_serial(config.matrix_dir, shape, sample_sets, config, 
-                    worker_json_files[0], es_hists_file)
+    logging.info("Running SSEA in parallel with %d processes" % 
+                 (config.num_processes))
+    worker_basenames = ssea_parallel(config.matrix_dir, shape, 
+                                     sample_sets, config,
+                                     es_hists_file, tmp_dir)
     # use ES null distributions to compute global statistics
     # and produce a report
-    logging.info("Computing global statistics")
-    compute_global_stats_parallel(es_hists_file, worker_json_files, 
-                                  worker_json_stats_files)
-    # merge json stats files
+    logging.info("Computing FDR q values")
     json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
-    # run a shell 'cat' command because it is fast
-    args = ['cat']
-    args.extend(worker_json_stats_files)
-    args.append('>')
-    args.append(json_file)
-    cmd = ' '.join(args)
-    retcode = subprocess.call(cmd, shell=True)
-    if retcode != 0:
-        logging.error('Error concatenating worker json files')
+    compute_qvalues_parallel(len(sample_sets), es_hists_file, worker_basenames, 
+                             json_file) 
     # cleanup
-    #if os.path.exists(tmp_dir):
-    #    shutil.rmtree(tmp_dir)
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
     logging.info("Finished")
