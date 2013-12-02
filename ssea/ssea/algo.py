@@ -177,18 +177,21 @@ def ssea_run(counts, size_factors, membership, rng, config):
         # respectively
         null_nes_count_sign = float(null_nes_sign.count())
         obs_nes_count_sign = float(obs_nes_sign.count())
+        #resample_nes_count_sign = float(resample_nes_sign.count())
         null_nes_sign_abs = np.fabs(null_nes_sign)
         obs_nes_sign_abs = np.fabs(obs_nes_sign)
+        #resample_nes_sign_abs = np.fabs(resample_nes_sign)
         for j in es_inds_sign:
             nes = np.fabs(nes_vals[j])
             if null_nes_count_sign == 0:
                 n = 0.0
             else:
-                n = (null_nes_sign_abs >= nes).sum() / float(null_nes_count_sign)
+                n = (null_nes_sign_abs >= nes).sum() / null_nes_count_sign
             if obs_nes_count_sign == 0:
                 d = 0.0
             else:
-                d = (obs_nes_sign_abs >= nes).sum() / float(obs_nes_count_sign)
+                d = (obs_nes_sign_abs >= nes).sum() / obs_nes_count_sign
+                #d = (resample_nes_sign_abs >= nes).sum() / resample_nes_count_sign
             if (n == 0) or (d == 0):
                 fdr_q_values[j] = 0.0
             else:
@@ -322,10 +325,11 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
             for k in xrange(len(null_keys)):
                 null_nes = np.clip(np.fabs(tup.null_nes), NES_MIN, NES_MAX)
                 obs_nes = np.clip(np.fabs(result.nes), NES_MIN, NES_MAX)
-                resample_nes = np.clip(np.fabs(tup.resample_nes), NES_MIN, NES_MAX)
                 hists[null_keys[k]][j] += np.histogram(null_nes, NES_BINS)[0]
                 hists[obs_keys[k]][j] += np.histogram(obs_nes, NES_BINS)[0]
-                hists[obs_keys[k]][j] += np.histogram(resample_nes, NES_BINS)[0]
+                # TODO: how to use resampled NES? 
+                #resample_nes = np.clip(np.fabs(tup.resample_nes), NES_MIN, NES_MAX)
+                #hists[obs_keys[k]][j] += np.histogram(resample_nes, NES_BINS)[0]
     # close report file
     outfileh.close()
     # save histograms to a file
