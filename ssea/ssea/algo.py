@@ -130,69 +130,42 @@ def ssea_run(counts, size_factors, membership, rng, config):
         null_es_vals[i,:] = k.es_vals
         null_es_ranks[i,:] = k.es_ranks
     # default containers for results
-    null_es_means = np.empty(membership.shape[1], dtype=np.float)
     nes_vals = np.empty(membership.shape[1], dtype=np.float)
     null_nes_vals = np.empty(shape, dtype=np.float)
     pvals = np.empty(membership.shape[1], dtype=np.float)
+    fdr_q_values = np.empty(membership.shape[1], dtype=np.float)
     # separate the positive and negative sides of the null distribution
     # based on the observed enrichment scores
-    es_neg_inds = (es_vals < 0).nonzero()[0]
-    if len(es_neg_inds) > 0:
-        # mask positive scores 
-        null_es_neg = np.ma.masked_greater_equal(null_es_vals[:,es_neg_inds], 0)
+    es_inds_neg = (es_vals < 0).nonzero()[0]
+    es_inds_pos = (es_vals >= 0).nonzero()[0]
+    for es_inds_sign, mask_func in ((es_inds_neg, np.ma.masked_greater_equal), 
+                                    (es_inds_pos, np.ma.masked_less_equal)):
+        if len(es_inds_sign) == 0:
+            continue
+        # mask scores 
+        null_es_sign = mask_func(null_es_vals[:,es_inds_sign], 0)
         # Adjust for variation in gene set size. Normalize ES(S,null)
         # and the observed ES(S), separately rescaling the positive and
         # negative scores by dividing by the mean of the ES(S,null) to
         # yield normalized scores NES(S,null)
-        null_es_neg_means = null_es_neg.mean(axis=0)
-        null_es_means[es_neg_inds] = null_es_neg_means
-        null_nes_neg = null_es_neg / np.fabs(null_es_neg_means)
-        null_nes_vals[:,es_neg_inds] = null_nes_neg
-        null_nes_neg_count = null_nes_neg.count()
+        null_es_means_sign = null_es_sign.mean(axis=0)
+        null_nes_sign = null_es_sign / np.fabs(null_es_means_sign)
+        null_nes_vals[:,es_inds_sign] = null_nes_sign
         # Normalize the observed ES(S) by rescaling by the mean of
         # the ES(S,null) separately for positive and negative ES(S)
-        obs_nes_neg = (np.ma.MaskedArray(es_vals[es_neg_inds]) / 
-                       np.fabs(null_es_neg_means))
-        obs_nes_neg_count = obs_nes_neg.count()
-        nes_vals[es_neg_inds] = obs_nes_neg
+        obs_nes_sign = (np.ma.MaskedArray(es_vals[es_inds_sign]) / 
+                        np.fabs(null_es_means_sign))
+        nes_vals[es_inds_sign] = obs_nes_sign
         # Normalize the resampled ES(S) by rescaling in a similar manner
-        resample_es_neg = np.ma.masked_greater_equal(resample_es_vals[:,es_neg_inds], 0)
-        resample_nes_neg = resample_es_neg / np.fabs(null_es_neg_means)
-        resample_nes_vals[:,es_neg_inds] = resample_nes_neg
+        resample_es_sign = mask_func(resample_es_vals[:,es_inds_sign], 0)
+        resample_nes_sign = resample_es_sign / np.fabs(null_es_means_sign)
+        resample_nes_vals[:,es_inds_sign] = resample_nes_sign
         # estimate nominal p value for S from ES(S,null) by using the
         # positive or negative portion of the distribution corresponding
         # to the sign of the observed ES(S)
-        pneg = 1.0 + (null_es_neg <= es_vals[es_neg_inds]).sum(axis=0)
-        pneg = pneg / (1.0 + null_es_neg.count(axis=0).astype(float))
-        pvals[es_neg_inds] = pneg
-    # do the same for the positive enrichment scores (see above for
-    # detailed comments
-    es_pos_inds = (es_vals >= 0).nonzero()[0]
-    if len(es_pos_inds) > 0:
-        # mask negative scores 
-        null_es_pos = np.ma.masked_less_equal(null_es_vals[:,es_pos_inds], 0)
-        # Normalize null ES
-        null_es_pos_means = null_es_pos.mean(axis=0)
-        null_es_means[es_pos_inds] = null_es_pos_means        
-        null_nes_pos = null_es_pos / np.fabs(null_es_pos_means)
-        null_nes_vals[:,es_pos_inds] = null_nes_pos
-        null_nes_pos_count = null_nes_pos.count()
-        # Normalize the observed ES(S)
-        obs_nes_pos = (np.ma.MaskedArray(es_vals[es_pos_inds]) / 
-                       np.fabs(null_es_pos_means))
-        obs_nes_pos_count = obs_nes_pos.count()
-        nes_vals[es_pos_inds] = obs_nes_pos
-        # Normalize the resampled ES(S) by rescaling in a similar manner
-        resample_es_pos = np.ma.masked_less_equal(resample_es_vals[:,es_pos_inds], 0)
-        resample_nes_pos = resample_es_pos / np.fabs(null_es_pos_means)
-        resample_nes_vals[:,es_pos_inds] = resample_nes_pos
-        # estimate p values
-        ppos = 1.0 + (null_es_pos >= es_vals[es_pos_inds]).sum(axis=0)
-        ppos = ppos / (1.0 + null_es_pos.count(axis=0).astype(np.float))
-        pvals[es_pos_inds] = ppos
-    # Control for multiple hypothesis testing
-    fdr_q_values = np.empty(membership.shape[1], dtype=np.float)
-    for j in xrange(membership.shape[1]):
+        p = (np.fabs(null_es_sign) >= np.fabs(es_vals[es_inds_sign])).sum(axis=0).astype(np.float)
+        p /= null_es_sign.count(axis=0).astype(np.float)
+        pvals[es_inds_sign] = p
         # For a given NES(S) = NES* >= 0, the FDR is the ratio of the 
         # percentage of all permutations NES(S,null) >= 0, whose 
         # NES(S,null) >= NES*, divided by the percentage of observed S with 
@@ -201,30 +174,25 @@ def ssea_run(counts, size_factors, membership, rng, config):
         # Also, compute FWER p values by finding the percentage 
         # of NES_max(S,null) >= NES*, and similarly for 
         # NES_min(S,null) <= NES* for positive and negative NES*, 
-        # respectively 
-        nes = nes_vals[j]
-        if np.sign(es_vals[j]) < 0:
-            if null_nes_neg_count == 0:
-                n = 0
+        # respectively
+        null_nes_count_sign = float(null_nes_sign.count())
+        obs_nes_count_sign = float(obs_nes_sign.count())
+        null_nes_sign_abs = np.fabs(null_nes_sign)
+        obs_nes_sign_abs = np.fabs(obs_nes_sign)
+        for j in es_inds_sign:
+            nes = np.fabs(nes_vals[j])
+            if null_nes_count_sign == 0:
+                n = 0.0
             else:
-                n = (null_nes_neg <= nes).sum() / float(null_nes_neg_count)
-            if obs_nes_neg_count == 0:
-                d = 0
+                n = (null_nes_sign_abs >= nes).sum() / float(null_nes_count_sign)
+            if obs_nes_count_sign == 0:
+                d = 0.0
             else:
-                d = (obs_nes_neg <= nes).sum() / float(obs_nes_neg_count) 
-        else:
-            if null_nes_pos_count == 0:
-                n = 0
+                d = (obs_nes_sign_abs >= nes).sum() / float(obs_nes_count_sign)
+            if (n == 0) or (d == 0):
+                fdr_q_values[j] = 0.0
             else:
-                n = (null_nes_pos >= nes).sum() / float(null_nes_pos_count)
-            if obs_nes_pos_count == 0:
-                d = 0
-            else:
-                d = (obs_nes_pos >= nes).sum() / float(obs_nes_pos_count)
-        if (n == 0) or (d == 0):
-            fdr_q_values[j] = 0.0
-        else:
-            fdr_q_values[j] = n / d
+                fdr_q_values[j] = n / d
     # q value is defined as the minimum FDR for which a test can be called
     # significant. to compute q values iterate over sample sets sorted by
     # NES and assign q values to either the minimum FDR previous seen or 
@@ -275,7 +243,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
             if n == 0 and d == 0:
                 odds_ratio = np.nan
             else:
-                odds_ratio = np.inf if d == 0 else n/d
+                odds_ratio = np.inf if d == 0 else (n / d)
         elif np.isfinite(d):
             odds_ratio = np.inf
         else:
@@ -354,10 +322,10 @@ def ssea_serial(matrix_dir, shape, sample_sets, config,
             for k in xrange(len(null_keys)):
                 null_nes = np.clip(np.fabs(tup.null_nes), NES_MIN, NES_MAX)
                 obs_nes = np.clip(np.fabs(result.nes), NES_MIN, NES_MAX)
-                # TODO: use resampled nes?
-                # obs_nes = np.clip(np.fabs(tup.resample_nes), NES_MIN, NES_MAX)
+                resample_nes = np.clip(np.fabs(tup.resample_nes), NES_MIN, NES_MAX)
                 hists[null_keys[k]][j] += np.histogram(null_nes, NES_BINS)[0]
                 hists[obs_keys[k]][j] += np.histogram(obs_nes, NES_BINS)[0]
+                hists[obs_keys[k]][j] += np.histogram(resample_nes, NES_BINS)[0]
     # close report file
     outfileh.close()
     # save histograms to a file
