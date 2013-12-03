@@ -339,6 +339,7 @@ def ssea_cluster_map(output_dir):
     if worker_index is None:
         logging.error('Could not find "PBS_ARRAYID" environment variable')
         return 1    
+    worker_index = int(worker_index)
     # open JSON files in output directory
     config, sample_sets, shape = _open_output_dir(output_dir)
     worker_file = os.path.join(config.output_dir, CLUSTER_WORKER_FILE)
