@@ -98,13 +98,13 @@ class BigCountMatrix(CountMatrix):
         fp = np.memmap(counts_file, dtype=FLOAT_DTYPE, mode='w+', 
                        shape=(len(row_inds),len(col_inds)))
         for i,ind in enumerate(row_inds):
-            fp[i,:] = self.counts[ind,col_inds]
+            fp[i,:] = np.array(self.counts[ind,col_inds], dtype=np.float)
         del fp
         # write cols
         fp = np.memmap(counts_t_file, dtype=FLOAT_DTYPE, mode='w+', 
                        shape=(len(col_inds),len(row_inds)))
         for j,ind in enumerate(col_inds):
-            fp[j,:] = self.counts_t[ind,row_inds]
+            fp[j,:] = np.array(self.counts_t[ind,row_inds], dtype=np.float)
         del fp
 
     @staticmethod

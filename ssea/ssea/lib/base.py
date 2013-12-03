@@ -328,7 +328,7 @@ class Result(object):
     FIELDS = ('row_id', 'ss_id', 'rand_seed', 'es', 'es_rank', 'nominal_p_value',
               'core_hits', 'core_misses', 'null_hits', 'null_misses',
               'fisher_p_value', 'odds_ratio', 'nes',
-              'fdr_q_value', 'ss_fdr_q_value', 
+              'fdr_q_value', 'ss_fdr_q_value', 'ss_rank',
               'resample_es_vals', 'resample_es_ranks', 
               'null_es_vals', 'null_es_ranks', 'null_es_hist')
     

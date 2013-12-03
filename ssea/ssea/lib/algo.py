@@ -379,13 +379,14 @@ def ssea_map(matrix_dir, shape, sample_sets, config,
     for p in procs:
         p.join()
 
-def compute_qvalues(json_iterator, hists_file, nsets):
+def compute_qvalues(json_iterator, hists_file, nrows, nsets):
     '''
     computes fdr q values from json Result objects sorted
     by abs(NES) (low to high)
     
     json_iterator: iterator that yields json objects in sorted order
     hists_file: contains histogram data from null distribution
+    nrows: number of rows (transcripts) in analysis
     nsets: number of sample sets in analysis
     '''
     # load histogram data
@@ -400,8 +401,11 @@ def compute_qvalues(json_iterator, hists_file, nsets):
         cdfs[k] = cdf2d
     # keep track of minimum FDR for each sample set for positive
     # and negative NES separately
-    min_pos_fdrs = np.ones(nsets, dtype=np.float)
-    min_neg_fdrs = np.ones(nsets, dtype=np.float)
+    min_fdrs_pos = np.ones(nsets, dtype=np.float)
+    min_fdrs_neg = np.ones(nsets, dtype=np.float)
+    # keep track of the rank of each transcript within the sample set
+    ss_ranks_pos = np.repeat(nrows, nsets)
+    ss_ranks_neg = np.repeat(nrows, nsets)
     # perform merge of sorted json files 
     for line in json_iterator:
         # load json document (one per line)
@@ -414,11 +418,15 @@ def compute_qvalues(json_iterator, hists_file, nsets):
         if es < 0:
             null_key = 'null_nes_neg'
             obs_key = 'obs_nes_neg'
-            min_fdrs = min_neg_fdrs
+            min_fdrs = min_fdrs_neg
+            res.ss_rank = ss_ranks_neg[i]
+            ss_ranks_neg[i] -= 1
         else:
             null_key = 'null_nes_pos'
             obs_key = 'obs_nes_pos'
-            min_fdrs = min_pos_fdrs
+            min_fdrs = min_fdrs_pos
+            res.ss_rank = ss_ranks_pos[i]
+            ss_ranks_pos[i] -= 1
         # to compute a sample set specific FDR q value we look at the
         # aggregated enrichment scores for all tests of that sample set
         # compute the cumulative sums of NES histograms
@@ -449,7 +457,7 @@ def compute_qvalues(json_iterator, hists_file, nsets):
     # cleanup
     hists.close()
 
-def ssea_reduce(input_basenames, num_sample_sets, output_json_file, 
+def ssea_reduce(input_basenames, nrows, nsets, output_json_file, 
                 output_hist_file):
     '''
     reduce step of SSEA run
@@ -461,7 +469,7 @@ def ssea_reduce(input_basenames, num_sample_sets, output_json_file,
     '''
     # merge NES histograms
     logging.debug("Merging %d worker histograms" % (len(input_basenames)))
-    hists = _init_hists(num_sample_sets)
+    hists = _init_hists(nsets)
     json_iterables = []
     for i in xrange(len(input_basenames)):        
         # create sorted json file streams
@@ -479,7 +487,7 @@ def ssea_reduce(input_basenames, num_sample_sets, output_json_file,
     try:
         with open(output_json_file, 'wb', 64*1024) as output:
             iterator = batch_merge(_cmp_json_nes, *json_iterables)
-            output.writelines(compute_qvalues(iterator, output_hist_file, num_sample_sets))
+            output.writelines(compute_qvalues(iterator, output_hist_file, nrows, nsets))
     finally:
         for iterable in json_iterables:
             try:
