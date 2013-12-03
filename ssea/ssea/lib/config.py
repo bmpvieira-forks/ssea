@@ -33,6 +33,7 @@ class Config(object):
     RESULTS_JSON_FILE = 'results.json'
     OUTPUT_HISTS_FILE = 'hists.npz'
     TMP_DIR = 'tmp'
+    LOG_DIR = 'log'
     
     def __init__(self):
         self.num_processes = 1

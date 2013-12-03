@@ -224,6 +224,11 @@ def ssea_cluster_init(config, ssea_script):
     if not os.path.exists(tmp_dir):
         logging.debug("Creating tmp directory '%s'" % (tmp_dir))
         os.makedirs(tmp_dir)
+    # create log directory
+    log_dir = os.path.join(config.output_dir, Config.LOG_DIR)
+    if not os.path.exists(log_dir):
+        logging.debug("Creating log directory '%s'" % (log_dir))
+        os.makedirs(log_dir)
     # map work into chunks
     worker_file = os.path.join(config.output_dir, CLUSTER_WORKER_FILE)
     num_workers = 0
@@ -263,8 +268,8 @@ def ssea_cluster_init(config, ssea_script):
     lines.append('#PBS -l %s' % (','.join(resource_fields)))
     lines.append('#PBS -t 0-%d' % (num_workers-1))
     lines.append('#PBS -V')
-    lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'map.stdout')))
-    lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'map.stderr')))
+    lines.append("#PBS -o %s" % (os.path.join(log_dir, 'map.stdout')))
+    lines.append("#PBS -e %s" % (os.path.join(log_dir, 'map.stderr')))
     # command line args
     args = ['python', ssea_script, '--cluster-map', '-o', config.output_dir]
     lines.append(' '.join(args))
@@ -298,8 +303,8 @@ def ssea_cluster_init(config, ssea_script):
     lines.append('#PBS -N %s' % (config.name))
     lines.append('#PBS -l %s' % (','.join(resource_fields)))
     lines.append('#PBS -V')
-    lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'reduce.stdout')))
-    lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'reduce.stderr')))
+    lines.append("#PBS -o %s" % (os.path.join(log_dir, 'reduce.stdout')))
+    lines.append("#PBS -e %s" % (os.path.join(log_dir, 'reduce.stderr')))
     lines.append("#PBS -W depend=afterokarray:%s" % (job_array_id))
     # command line args
     args = ['python', ssea_script, '--cluster-reduce', '-o', config.output_dir]
@@ -311,16 +316,6 @@ def ssea_cluster_init(config, ssea_script):
         f.write('\n'.join(lines))
     # submit reduce job
     qsub(lines)
-    
-    #print lines
-    #if deps is not None:
-    #    lines.append("#PBS -W depend=afterok:%s" % (":".join([d for d in deps])))
-#     # submit job        
-#     import subprocess
-#     p = subprocess.Popen("qsub", stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-#     p.stdin.write('\n'.join(shell_commands))
-#     job_id = p.communicate()[0]
-#     return job_id.strip()
     return 0        
 
 def _read_worker_chunk(filename, index):    
