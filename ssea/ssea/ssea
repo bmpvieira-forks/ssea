@@ -23,7 +23,7 @@ import shutil
 
 __all__ = []
 
-PROFILE = 1
+PROFILE = 0
 
 # local imports
 from ssea.lib.config import Config 
