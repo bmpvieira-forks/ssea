@@ -8,7 +8,7 @@ import logging
 import argparse
 import numpy as np
 
-from ssea.countdata import BigCountMatrix
+from ssea.lib.countdata import BigCountMatrix
 
 def find_transcripts_to_skip(input_dir, skip_nan, skip_zero):
     '''

@@ -10,11 +10,12 @@ import argparse
 import logging
 import pymongo
 import subprocess
-from ssea.base import Config
-from ssea.algo import ES_BINS_NEG, ES_BINS_POS
-import ssea
 import collections
 import numpy as np
+
+from ssea.lib.base import Config
+from ssea.lib.algo import ES_BINS_NEG, ES_BINS_POS
+import ssea
 
 #connects to the mongo db and returns a dictionary  
 #containing each collection in the database

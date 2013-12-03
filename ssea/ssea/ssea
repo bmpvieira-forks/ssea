@@ -271,7 +271,8 @@ def ssea_cluster_init(config, ssea_script):
     lines.append("#PBS -o %s" % (os.path.join(log_dir, 'map.stdout')))
     lines.append("#PBS -e %s" % (os.path.join(log_dir, 'map.stderr')))
     # command line args
-    args = ['python', ssea_script, '--cluster-map', '-o', config.output_dir]
+    args = ['python', ssea_script, '-v', '--cluster-map', '-o', 
+            config.output_dir]
     lines.append(' '.join(args))
     lines.append('')
     # write script to file
@@ -290,7 +291,7 @@ def ssea_cluster_init(config, ssea_script):
     logging.debug('Reduce walltime calculation: %d rows and %d sample sets' % 
                   (shape[0], len(sample_sets)))
     logging.debug('Reduce will compute %d results' % (num_results))
-    logging.debug('\tAt %fs per test the worker will take %f hours' % 
+    logging.debug('\tAt %fs per result this will take %f hours' % 
                   (REDUCE_SECS_PER_RESULT, hours))
     logging.debug('\tPadded reduce walltime is %dh' % (padded_hours))
     # make pbs resource fields
@@ -307,7 +308,8 @@ def ssea_cluster_init(config, ssea_script):
     lines.append("#PBS -e %s" % (os.path.join(log_dir, 'reduce.stderr')))
     lines.append("#PBS -W depend=afterokarray:%s" % (job_array_id))
     # command line args
-    args = ['python', ssea_script, '--cluster-reduce', '-o', config.output_dir]
+    args = ['python', ssea_script, '-v', '--cluster-reduce', '-o', 
+            config.output_dir]
     lines.append(' '.join(args))
     lines.append('')
     # write script to file
