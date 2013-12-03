@@ -261,7 +261,7 @@ def ssea_cluster_init(config, ssea_script):
     lines.extend(pbs_script_lines)
     lines.append('#PBS -N %s' % (config.name))
     lines.append('#PBS -l %s' % (','.join(resource_fields)))
-    lines.append('#PBS -J 0-%d' % (num_workers))
+    lines.append('#PBS -t 0-%d' % (num_workers))
     lines.append('#PBS -V')
     lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'map.stdout')))
     lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'map.stderr')))
@@ -335,9 +335,9 @@ def _read_worker_chunk(filename, index):
 
 def ssea_cluster_map(output_dir):
     # the PBS_ARRAY_INDEX environment variable should be set
-    worker_index = os.environ.get('PBS_ARRAY_INDEX', None)
+    worker_index = os.environ.get('PBS_ARRAYID', None)
     if worker_index is None:
-        logging.error('Could not find "PBS_ARRAY_INDEX" environment variable')
+        logging.error('Could not find "PBS_ARRAYID" environment variable')
         return 1    
     # open JSON files in output directory
     config, sample_sets, shape = _open_output_dir(output_dir)
@@ -347,6 +347,7 @@ def ssea_cluster_map(output_dir):
     ssea_serial(config.matrix_dir, shape, sample_sets, config,
                 worker_basename, startrow, endrow)
     return 0
+
 
 def ssea_cluster_reduce(output_dir):
     # open JSON files in output directory
