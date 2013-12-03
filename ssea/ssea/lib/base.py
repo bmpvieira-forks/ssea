@@ -3,12 +3,8 @@ Created on Oct 18, 2013
 
 @author: mkiyer
 '''
-import os
-import argparse
 import logging
 import json
-from datetime import datetime
-from time import time
 import itertools
 import numpy as np
 
@@ -31,9 +27,6 @@ class NumpyJSONEncoder(json.JSONEncoder):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
-
-def timestamp():
-    return datetime.fromtimestamp(time()).strftime('%Y-%m-%d-%H-%M-%S-%f')
 
 def quantile_sorted(a, frac):
     def _interpolate(a, b, fraction):
@@ -120,139 +113,6 @@ class ParserError(Exception):
         return self.msg
     def __unicode__(self):
         return self.msg
-
-class Config(object):
-    # constants
-    MAX_ES_POINTS = 100
-    NUM_NULL_ES_BINS = 101
-    NULL_ES_BINS = np.linspace(-1.0, 1.0, num=NUM_NULL_ES_BINS)
-    ES_QUANTILES = (0.0, 0.01, 0.05, 0.10, 0.25, 0.50, 
-                    0.75, 0.90, 0.95, 0.99, 1.0)
-    # constants
-    SAMPLES_JSON_FILE = 'samples.json'
-    METADATA_JSON_FILE = 'metadata.json'
-    SAMPLE_SETS_JSON_FILE = 'sample_sets.json'
-    CONFIG_JSON_FILE = 'config.json'
-    MATRIX_DIR = 'matrix'
-    RESULTS_JSON_FILE = 'results.json'
-    OUTPUT_HISTS_FILE = 'es_hists.npz'
-    
-    def __init__(self):
-        self.num_processes = 1
-        self.output_dir = "SSEA_%s" % (timestamp())
-        self.matrix_dir = None
-        self.name = 'myssea'
-        self.perms = 1000
-        self.resampling_iterations = 100
-        self.weight_miss = WeightMethod.LOG
-        self.weight_hit = WeightMethod.LOG
-        self.weight_param = 1.0
-        self.noise_loc = 1.0
-        self.noise_scale = 1.0
-
-    def to_json(self):
-        return json.dumps(self.__dict__)
-    
-    @staticmethod
-    def from_json(s):
-        c = Config()
-        d = json.loads(s)
-        c.__dict__ = d
-        return c
-    
-    @staticmethod
-    def from_dict(d):
-        c = Config()
-        c.__dict__ = d
-        return c
-
-    @staticmethod
-    def parse_json(filename):
-        with open(filename, 'r') as fp:
-            line = fp.next()
-            return Config.from_json(line.strip())
-
-    def update_argument_parser(self, parser=None):
-        if parser is None:
-            parser = argparse.ArgumentParser()
-        grp = parser.add_argument_group("SSEA Options")
-        grp.add_argument('-p', '--num-processes', dest='num_processes',
-                         type=int, default=1,
-                         help='Number of processor cores available '
-                         '[default=%(default)s]')
-        grp.add_argument('-o', '--output-dir', dest="output_dir", 
-                         help='Output directory [default=%(default)s]')
-        grp.add_argument('-n', '--name', dest="name", default=self.name,
-                         help='Analysis name [default=%(default)s]')
-        grp.add_argument('--perms', type=int, default=self.perms,
-                         help='Number of permutations '
-                         '[default=%(default)s]')
-        grp.add_argument('--weight-miss', dest='weight_miss',
-                         choices=WEIGHT_METHODS.keys(), 
-                         default='log',
-                         help='Weighting method for elements not in set ' 
-                         '[default=%(default)s]')
-        grp.add_argument('--weight-hit', dest='weight_hit', 
-                         choices=WEIGHT_METHODS.keys(), 
-                         default='log',
-                         help='Weighting method for elements in set '
-                         '[default=%(default)s]')
-        grp.add_argument('--weight-param', dest='weight_param', type=float, 
-                         default=self.weight_param,
-                         help='Either log2(n + X) for log transform or '
-                         'pow(n,X) for exponential (root) transform '
-                         '[default=%(default)s]')
-        grp2 = parser.add_mutually_exclusive_group(required=True)
-        grp2.add_argument('--tsv', dest='tsv_file', default=None, 
-                         help='Tab-delimited text file containing data matrix')
-        grp2.add_argument('--matrix', dest='matrix_dir', default=None, 
-                         help='Directory with binary memory-mapped matrix files') 
-        return parser
-
-    def log(self, log_func=logging.info):
-        log_func("Parameters")
-        log_func("----------------------------------")
-        log_func("name:                    %s" % (self.name))
-        log_func("num processes:           %d" % (self.num_processes))
-        log_func("permutations:            %d" % (self.perms))
-        log_func("weight method miss:      %s" % (WEIGHT_METHOD_STR[self.weight_miss]))
-        log_func("weight method hit:       %s" % (WEIGHT_METHOD_STR[self.weight_hit]))
-        log_func("weight param:            %f" % (self.weight_param))
-        log_func("output directory:        %s" % (self.output_dir))
-        log_func("input matrix directory:  %s" % (self.matrix_dir))
-        log_func("----------------------------------")
-
-    def parse_args(self, parser, args):
-        # process and check arguments
-        self.name = args.name
-        self.num_processes = args.num_processes
-        self.perms = max(1, args.perms)
-        # check weight methods
-        if isinstance(args.weight_miss, basestring):
-            self.weight_miss = WEIGHT_METHODS[args.weight_miss]
-        if isinstance(args.weight_hit, basestring):
-            self.weight_hit = WEIGHT_METHODS[args.weight_hit]
-        self.weight_param = args.weight_param        
-        if self.weight_param < 0.0:
-            parser.error('weight param < 0.0 invalid')
-        elif ((self.weight_miss == 'log' or self.weight_hit == 'log')):
-            if self.weight_param < 1.0:
-                parser.error('weight param %f < 1.0 not allowed with '
-                             'log methods' % (self.weight_param))
-        # output directory
-        self.output_dir = args.output_dir
-        if os.path.exists(self.output_dir):
-            parser.error("output directory '%s' already exists" % 
-                         (self.output_dir))
-        # matrix input directory
-        if args.matrix_dir is not None:
-            if not os.path.exists(args.matrix_dir):
-                parser.error('matrix path "%s" not found' % (args.matrix_dir))
-            self.matrix_dir = args.matrix_dir
-        if args.tsv_file is not None:
-            if not os.path.exists(args.tsv_file):
-                parser.error('matrix tsv file "%s" not found' % (args.tsv_file))
-            self.matrix_dir = os.path.join(self.output_dir, Config.MATRIX_DIR)
 
 class Metadata(object):
     __slots__ = ('_id', 'name', 'params')

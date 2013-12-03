@@ -11,12 +11,12 @@ from Cython.Build import cythonize
 import numpy
 numpy_inc = numpy.get_include()
 
-ext_modules = [Extension('ssea.kernel', 
-                         sources=['ssea/kernel.pyx', 'ssea/rng.c'], 
+ext_modules = [Extension('ssea.lib.kernel', 
+                         sources=['ssea/lib/kernel.pyx', 'ssea/lib/rng.c'], 
                          include_dirs=[numpy_inc],
                          libraries=['m']),
-               Extension('ssea.cfisher', 
-                         sources=['ssea/cfisher.pyx'], 
+               Extension('ssea.lib.cfisher', 
+                         sources=['ssea/lib/cfisher.pyx'], 
                          include_dirs=[numpy_inc])]
 
 setup(name='SSEA',
@@ -27,6 +27,7 @@ setup(name='SSEA',
       requires=['numpy', 'jinja2'],
       ext_modules=cythonize(ext_modules),
       packages={'ssea'},
-      package_data={'ssea.templates': ['detailedreport.html',
-                                       'overview.html']},
-      scripts=['ssea/ssea.py'])
+      package_data={'ssea.templates': ['details.html',
+                                       'report.html']},
+      scripts=['ssea/ssea', 
+               'ssea/report'])

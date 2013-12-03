@@ -17,172 +17,89 @@ Assessment of enrichment in a ranked list of quantitative measurements
 '''
 import sys
 import os
-import argparse
 import logging
 import itertools
+import shutil
 
 __all__ = []
 
-DEBUG = 1
 PROFILE = 1
 
 # local imports
-from ssea import __version__, __date__, __updated__
-from ssea.base import SampleSet, Config, Metadata
-from ssea.countdata import BigCountMatrix
-from ssea.algo import ssea_main
+from ssea.lib.config import Config 
+from ssea.lib.base import SampleSet, Metadata, chunk
+from ssea.lib.countdata import BigCountMatrix
+from ssea.lib.algo import ssea_map, ssea_reduce, ssea_serial
 
-# default command line options
-DEFAULT_SMIN = 1
-DEFAULT_SMAX = 0
-DEFAULT_NA_VALUE = 'NA'
+CLUSTER_WORKER_FILE = 'workers.txt'
+CLUSTER_MAP_SCRIPT = 'map.pbs'
+CLUSTER_REDUCE_SCRIPT = 'reduce.pbs'
+CLUSTER_MAPREDUCE_SCRIPT = 'run.pbs'
 
-def main(argv=None):
-    '''Command line options.'''    
-    if argv is None:
-        argv = sys.argv
-    else:
-        sys.argv.extend(argv)
+# cluster walltime computation constants
+MAP_SECS_PER_TEST = 0.001
+REDUCE_SECS_PER_RESULT = 0.01
+HOURS_PER_SEC = (1.0 / 3600.0)
+PADDING_HOURS = 2.0
 
-    program_name = os.path.basename(sys.argv[0])
-    program_version = "v%s" % __version__
-    program_build_date = str(__updated__)
-    program_version_message = '%s %s (%s)' % (program_name, program_version, program_build_date)
-    program_shortdesc = __import__('__main__').__doc__.split("\n")[1]
-    program_license = '''%s
-
-  Created by mkiyer and yniknafs on %s.
-  Copyright 2013 MCTP. All rights reserved.
-  
-  Licensed under the GPL
-  http://www.gnu.org/licenses/gpl.html
-  
-  Distributed on an "AS IS" basis without warranties
-  or conditions of any kind, either express or implied.
-
-USAGE
-''' % (program_shortdesc, str(__date__))
-
-    # create instance of run configuration
-    config = Config()
-    # Setup argument parser
-    parser = argparse.ArgumentParser(description=program_license)
-    # Add command line parameters
-    config.update_argument_parser(parser)
-    parser.add_argument("-v", "--verbose", dest="verbose", 
-                        action="store_true", default=False, 
-                        help="set verbosity level [default: %(default)s]")
-    parser.add_argument('-V', '--version', action='version', 
-                        version=program_version_message)
-    parser.add_argument('--smin', dest="smin", type=int,
-                        default=DEFAULT_SMIN, metavar="N",
-                        help='Exclude sample sets smaller than N '
-                        'from the analysis [default=%(default)s]')
-    parser.add_argument('--smax', dest="smax", type=int,
-                        default=DEFAULT_SMAX, metavar="N",
-                        help='Exclude sample sets larger than N '
-                        'from the analysis [default=%(default)s]')
-    parser.add_argument('--smx', dest="smx_files", action='append',
-                        help='File(s) containing sets in column format')
-    parser.add_argument('--smt', dest="smt_files", action='append',
-                        help='File(s) containing sets in row format')
-    parser.add_argument('--colmeta', dest='col_metadata_file',
-                        help='file containing metadata corresponding to each '
-                        'column of the weight matrix file')
-    parser.add_argument('--rowmeta', dest='row_metadata_file',
-                        help='file containing metadata corresponding to each '
-                        'row of the weight matrix file')
-    parser.add_argument('--na-value', dest='na_values', 
-                        default=[DEFAULT_NA_VALUE], action='append',
-                        help='Value to interpret as missing/invalid '
-                        'in weight matrix [default=%(default)s]')  
-    # Process arguments
-    args = parser.parse_args()
-    # setup logging
-    if DEBUG or (args.verbose > 0):
-        level = logging.DEBUG
-    else:
-        level = logging.INFO
-    logging.basicConfig(level=level,
-                        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    # initialize configuration
-    config.parse_args(parser, args)
-    # sample set size limits
-    smin = max(1, args.smin)
-    smax = max(0, args.smax)
-    # check metadata
-    if args.row_metadata_file is not None:
-        if not os.path.exists(args.row_metadata_file):
-            parser.error('row metadata file "%s" not found' % (args.row_metadata_file))
-    if args.col_metadata_file is not None:
-        if not os.path.exists(args.col_metadata_file):
-            parser.error('col metadata file "%s" not found' % (args.col_metadata_file))
-    # check sample sets
-    smx_files = []
-    if args.smx_files is not None:
-        for filename in args.smx_files:
-            if not os.path.exists(filename):
-                parser.error("smx file '%s' not found" % (filename))
-            smx_files.append(filename)
-    smt_files = []
-    if args.smt_files is not None:
-        for filename in args.smt_files:
-            if not os.path.exists(filename):
-                parser.error("smt file '%s' not found" % (filename))
-            smt_files.append(filename)
-    if len(smx_files) == 0 and len(smt_files) == 0:
-        parser.error("No sample sets specified")
+def init(config):
+    '''
+    creates a skeleton SSEA output directory with config, metadata, 
+    and sample sets stored as JSON files
+    
+    config: ssea.lib.Config object with SSEA options specified
+    '''
     # read/process weight matrix
-    if args.tsv_file is not None:
+    if config.matrix_tsv_file is not None:
         logging.info("Converting text matrix file to binary format")
         if not os.path.exists(config.matrix_dir):
             os.makedirs(config.matrix_dir)
-        bm = BigCountMatrix.from_tsv(args.tsv_file, 
+        bm = BigCountMatrix.from_tsv(config.matrix_tsv_file, 
                                      config.matrix_dir, 
-                                     na_values=args.na_values)
-        # TODO: add parameter
+                                     na_values=config.matrix_na_values)
         bm.estimate_size_factors('deseq')
     else:
-        bm = BigCountMatrix.open(args.matrix_dir)
+        bm = BigCountMatrix.open(config.matrix_dir)
         if bm.size_factors is None:
             bm.estimate_size_factors('deseq')
     # read metadata
-    if args.row_metadata_file is not None:
+    if config.row_metadata_file is not None:
         logging.info("Reading row metadata")
-        row_metadata = list(Metadata.parse_tsv(args.row_metadata_file, bm.rownames))
+        row_metadata = list(Metadata.parse_tsv(config.row_metadata_file, bm.rownames))
     else:
         id_iter = itertools.count()
         row_metadata = [Metadata(id_iter.next(), x) for x in bm.rownames]
-    if args.col_metadata_file is not None:
+    if config.col_metadata_file is not None:
         logging.info("Reading column metadata")
-        col_metadata = list(Metadata.parse_tsv(args.col_metadata_file, bm.colnames))
+        col_metadata = list(Metadata.parse_tsv(config.col_metadata_file, bm.colnames))
     else:
         id_iter = itertools.count()
         col_metadata = [Metadata(id_iter.next(), x) for x in bm.colnames]
+    shape = (len(row_metadata), len(col_metadata))
     # setup output directory
     if not os.path.exists(config.output_dir):
         logging.info("Creating output directory '%s'" % 
                      (config.output_dir))
-        os.makedirs(config.output_dir)    
+        os.makedirs(config.output_dir)
     # read sample sets
     logging.info("Reading sample sets")
     sample_sets = []
-    for filename in smx_files:
+    for filename in config.smx_files:
         logging.debug("\tFile: %s" % (filename))
         sample_sets.extend(SampleSet.parse_smx(filename, col_metadata))
-    for filename in smt_files:
+    for filename in config.smt_files:
         logging.debug("\tFile: %s" % (filename))
         sample_sets.extend(SampleSet.parse_smt(filename, col_metadata))
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:
-        if ((smin > 0) and (len(sample_set) < smin)):
+        if ((config.smin > 0) and (len(sample_set) < config.smin)):
             logging.warning("\tsample set %s excluded because size %d < %d" %                              
-                            (sample_set.name, len(sample_set), smin))
+                            (sample_set.name, len(sample_set), config.smin))
             continue        
-        if ((smax > 0) and (len(sample_set) > smax)):
+        if ((config.smax > 0) and (len(sample_set) > config.smax)):
             logging.warning("\tsample set %s excluded because size %d > %d" % 
-                            (sample_set.name, len(sample_set), smax))
+                            (sample_set.name, len(sample_set), config.smax))
             continue
         logging.debug("\tsample set %s size %d" % 
                       (sample_set.name, len(sample_set)))
@@ -193,12 +110,285 @@ USAGE
     sample_sets = filtered_sample_sets
     # re-assign contiguous identifiers
     for i,sample_set in enumerate(sample_sets):
-        sample_set._id = i
-    # show final configuration
-    config.log()
-    # run ssea
-    ssea_main(config, sample_sets, row_metadata, col_metadata)
+        sample_set._id = i    
+    # write row metadata output
+    metadata_file = os.path.join(config.output_dir, 
+                                 Config.METADATA_JSON_FILE)
+    logging.debug("Writing row metadata '%s'" % (metadata_file))
+    with open(metadata_file, 'w') as fp:
+        for m in row_metadata:
+            print >>fp, m.to_json()
+    # write column metadata output
+    samples_file = os.path.join(config.output_dir, 
+                                Config.SAMPLES_JSON_FILE) 
+    logging.debug("Writing column metadata '%s'" % (samples_file))
+    with open(samples_file, 'w') as fp:
+        for m in col_metadata:
+            print >>fp, m.to_json()
+    # write sample sets
+    sample_sets_file = os.path.join(config.output_dir, 
+                                    Config.SAMPLE_SETS_JSON_FILE)
+    with open(sample_sets_file, 'w') as fp:
+        for ss in sample_sets:
+            print >>fp, ss.to_json()
+    # write configuration
+    config_file = os.path.join(config.output_dir, 
+                               Config.CONFIG_JSON_FILE)
+    logging.debug("Writing configuration '%s'" % (config_file))
+    with open(config_file, 'w') as fp:
+        print >>fp, config.to_json()
+    # return essential objects needed to run ssea
+    return config, sample_sets, shape
+
+def ssea_mapreduce(config, sample_sets, shape):
+    '''
+    multiprocessing map/reduce implementation of ssea 
+    
+    call after initializing an output directory using 'init' (see above)
+    '''
+    # create temp directory
+    tmp_dir = os.path.join(config.output_dir, Config.TMP_DIR)
+    if not os.path.exists(tmp_dir):
+        logging.debug("Creating tmp directory '%s'" % (tmp_dir))
+        os.makedirs(tmp_dir)
+    # map work into chunks
+    worker_basenames = []
+    worker_chunks = []
+    for startrow,endrow in chunk(shape[0], config.num_processes):
+        i = len(worker_basenames)
+        logging.debug("Worker process %d range %d-%d (%d total rows)" % 
+                      (i, startrow, endrow, (endrow-startrow)))
+        # worker output files
+        basename = os.path.join(tmp_dir, "w%d" % (i))
+        worker_basenames.append(basename)
+        worker_chunks.append((startrow, endrow))
+    # output files
+    logging.info("Running SSEA map step with %d parallel processes " % 
+                 (len(worker_basenames)))
+    # map step
+    ssea_map(config.matrix_dir, shape, sample_sets, config,
+             worker_basenames, worker_chunks)
+    # reduce step
+    logging.info("Computing FDR q values")
+    hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
+    json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
+    ssea_reduce(worker_basenames, len(sample_sets), json_file, hists_file)
+    # cleanup
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+    logging.debug("Done.")
     return 0
+
+def _open_output_dir(output_dir):
+    # read config
+    config_json_file = os.path.join(output_dir, Config.CONFIG_JSON_FILE)
+    config = Config.parse_json(config_json_file)
+    # read sample sets
+    sample_sets_json_file = os.path.join(output_dir, Config.SAMPLE_SETS_JSON_FILE)
+    sample_set_dict = dict((ss._id,ss) for ss in SampleSet.parse_json(sample_sets_json_file))
+    # convert sample set dictionary to list
+    sample_sets = []
+    for k in sorted(sample_set_dict):
+        sample_sets.append(sample_set_dict[k])
+    # count metadata
+    row_metadata_json_file = os.path.join(output_dir, Config.METADATA_JSON_FILE)
+    col_metadata_json_file = os.path.join(output_dir, Config.SAMPLES_JSON_FILE)
+    nrows = sum(1 for x in Metadata.parse_json(row_metadata_json_file))
+    ncols = sum(1 for x in Metadata.parse_json(col_metadata_json_file))
+    shape = (nrows, ncols)
+    return config, sample_sets, shape
+
+def qsub(lines):
+    # submit job        
+    import subprocess
+    p = subprocess.Popen("qsub", stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    p.stdin.write('\n'.join(lines))
+    job_id = p.communicate()[0]
+    return job_id.strip()
+
+def ssea_cluster_init(config, ssea_script):
+    '''
+    cluster implementation of ssea
+    
+    call after initializing an output directory using init
+    '''
+    # create skeleton for ssea run
+    config, sample_sets, shape = init(config)
+    # read pbs configuration commands
+    pbs_script_lines = []
+    if config.pbs_script is not None:
+        with open(config.pbs_script) as f:
+            pbs_script_lines.extend(line.strip() for line in f)
+    # create temp directory
+    tmp_dir = os.path.join(config.output_dir, Config.TMP_DIR)
+    if not os.path.exists(tmp_dir):
+        logging.debug("Creating tmp directory '%s'" % (tmp_dir))
+        os.makedirs(tmp_dir)
+    # map work into chunks
+    worker_file = os.path.join(config.output_dir, CLUSTER_WORKER_FILE)
+    num_workers = 0
+    max_chunk_size = 0
+    with open(worker_file, 'w') as f:
+        for startrow, endrow in chunk(shape[0], config.num_processes):
+            i = num_workers
+            logging.debug("Worker process %d range %d-%d (%d total rows)" % 
+                          (i, startrow, endrow, (endrow-startrow)))
+            basename = os.path.join(tmp_dir, "w%d" % (i))
+            fields = [i, basename, startrow, endrow]
+            print >>f, '\t'.join(map(str,fields))
+            max_chunk_size = max(max_chunk_size, (endrow - startrow))
+            num_workers += 1
+    #
+    # write map script
+    #
+    # calculate job walltime
+    num_tests = (max_chunk_size *
+                 (1 + config.perms + config.resampling_iterations) * 
+                 len(sample_sets))
+    hours = (num_tests * MAP_SECS_PER_TEST * HOURS_PER_SEC)
+    padded_hours = int(hours + PADDING_HOURS) # padding
+    logging.debug('Map step walltime calculation: %d rows/chunk %d perms %d resamplings %d sample sets' %
+                  (max_chunk_size, config.perms, config.resampling_iterations, len(sample_sets)))
+    logging.debug('Map step will have each worker run the SSEA kernel %d times' % (num_tests))
+    logging.debug('\tAt %fs per test the worker will take %f hours' % (MAP_SECS_PER_TEST, hours))
+    logging.debug('\tPadded walltime is %dh' % (padded_hours))
+    # make pbs resource fields
+    resource_fields = []
+    resource_fields.append('mem=1gb')
+    resource_fields.append('walltime=%d:00:00' % (padded_hours))
+    resource_fields.append('nodes=1:ppn=1')
+    lines = ['#!/bin/bash']
+    lines.extend(pbs_script_lines)
+    lines.append('#PBS -N %s' % (config.name))
+    lines.append('#PBS -l %s' % (','.join(resource_fields)))
+    lines.append('#PBS -J 0-%d' % (num_workers))
+    lines.append('#PBS -V')
+    lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'map.stdout')))
+    lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'map.stderr')))
+    # command line args
+    args = ['python', ssea_script, '--cluster-map', '-o', config.output_dir]
+    lines.append(' '.join(args))
+    lines.append('')
+    # write script to file
+    script_file = os.path.join(config.output_dir, CLUSTER_MAP_SCRIPT)
+    with open(script_file, 'w') as f:
+        f.write('\n'.join(lines))
+    # submit map job
+    # array_job_id = qsub(lines)
+    #
+    # write reduce script
+    #
+    num_results = (shape[0] * len(sample_sets))
+    hours = (num_results * REDUCE_SECS_PER_RESULT * HOURS_PER_SEC)
+    padded_hours = int(hours + PADDING_HOURS) # padding
+    logging.debug('Reduce walltime calculation: %d rows and %d sample sets' % 
+                  (shape[0], len(sample_sets)))
+    logging.debug('Reduce will compute %d results' % (num_results))
+    logging.debug('\tAt %fs per test the worker will take %f hours' % 
+                  (REDUCE_SECS_PER_RESULT, hours))
+    logging.debug('\tPadded reduce walltime is %dh' % (padded_hours))
+    # make pbs resource fields
+    resource_fields = []
+    resource_fields.append('mem=4gb')
+    resource_fields.append('walltime=%d:00:00' % (padded_hours))
+    resource_fields.append('nodes=1:ppn=1')
+    lines = ['#!/bin/bash']
+    lines.extend(pbs_script_lines)
+    lines.append('#PBS -N %s' % (config.name))
+    lines.append('#PBS -l %s' % (','.join(resource_fields)))
+    lines.append('#PBS -V')
+    lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'reduce.stdout')))
+    lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'reduce.stderr')))
+    # command line args
+    args = ['python', ssea_script, '--cluster-reduce', '-o', config.output_dir]
+    lines.append(' '.join(args))
+    lines.append('')
+    # write script to file
+    script_file = os.path.join(config.output_dir, CLUSTER_REDUCE_SCRIPT)
+    with open(script_file, 'w') as f:
+        f.write('\n'.join(lines))
+    
+    #print lines
+    #if deps is not None:
+    #    lines.append("#PBS -W depend=afterok:%s" % (":".join([d for d in deps])))
+#     # submit job        
+#     import subprocess
+#     p = subprocess.Popen("qsub", stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+#     p.stdin.write('\n'.join(shell_commands))
+#     job_id = p.communicate()[0]
+#     return job_id.strip()
+    return 0        
+
+def _read_worker_chunk(filename, index):    
+    with open(filename, 'r') as f:
+        # search for worker index
+        for line in f:
+            fields = line.strip().split('\t')
+            i = int(fields[0])
+            basename = fields[1]
+            startrow = int(fields[2])
+            endrow = int(fields[3])
+            if i == index:
+                return (basename, startrow, endrow)
+    logging.error("index '%d' not found in worker chunk file" % (index))
+    assert False
+
+def ssea_cluster_map(output_dir):
+    # the PBS_ARRAY_INDEX environment variable should be set
+    worker_index = os.environ.get('PBS_ARRAY_INDEX', None)
+    if worker_index is None:
+        logging.error('Could not find "PBS_ARRAY_INDEX" environment variable')
+        return 1    
+    # open JSON files in output directory
+    config, sample_sets, shape = _open_output_dir(output_dir)
+    worker_file = os.path.join(config.output_dir, CLUSTER_WORKER_FILE)
+    worker_basename, startrow, endrow = _read_worker_chunk(worker_file, worker_index)
+    # run SSEA algorithm
+    ssea_serial(config.matrix_dir, shape, sample_sets, config,
+                worker_basename, startrow, endrow)
+    return 0
+
+def ssea_cluster_reduce(output_dir):
+    # open JSON files in output directory
+    config, sample_sets, shape = _open_output_dir(output_dir)
+    worker_file = os.path.join(config.output_dir, CLUSTER_WORKER_FILE)
+    with open(worker_file, 'r') as f:
+        worker_basenames = [x.strip().split('\t')[1] for x in f] 
+    # reduce step
+    logging.info("Computing FDR q values")
+    hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
+    json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
+    ssea_reduce(worker_basenames, len(sample_sets), json_file, hists_file)
+    # cleanup
+    tmp_dir = os.path.join(output_dir, Config.TMP_DIR)
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+    logging.debug("Done.")
+    return 0
+
+
+def main():
+    # create instance of run configuration
+    # TODO: setup argument parser and command line arguments
+    config = Config.parse_args()
+    # show configuration
+    config.log()
+    # decide how to run ssea
+    if config.cluster is not None:
+        if config.cluster == 'map':
+            retcode = ssea_cluster_map(config.output_dir)
+        elif config.cluster == 'reduce':
+            retcode = ssea_cluster_reduce(config.output_dir)
+        else:
+            # set absolute path to this script
+            ssea_script = os.path.abspath(sys.argv[0])
+            # run cluster setup script
+            ssea_cluster_init(config, ssea_script)
+            retcode = 0
+    else:
+        # run ssea
+        retcode = ssea_mapreduce(*init(config))
+    return retcode
 
 if __name__ == "__main__":
     if PROFILE:

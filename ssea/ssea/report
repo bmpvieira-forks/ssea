@@ -27,9 +27,10 @@ from matplotlib import figure
 
 # local imports
 from ssea import __version__, __date__, __updated__
-from ssea.kernel import ssea_kernel, RandomState
-from base import BOOL_DTYPE, timestamp, Config, Result, Metadata, SampleSet
-from countdata import BigCountMatrix
+from ssea.lib.kernel import ssea_kernel, RandomState
+from ssea.lib.base import BOOL_DTYPE, Result, Metadata, SampleSet
+from ssea.lib.config import Config, timestamp
+from ssea.lib.countdata import BigCountMatrix
 
 # setup path to web files
 import ssea
@@ -558,9 +559,6 @@ def report(config):
                                          Config.SAMPLE_SETS_JSON_FILE)
     config_json_file = os.path.join(config.input_dir, 
                                     Config.CONFIG_JSON_FILE)
-    results_json_flie = os.path.join(config.input_dir, 
-                                    Config.CONFIG_JSON_FILE)
-    
     # write filtered results to output file
     filtered_results_file = os.path.join(config.output_dir, 
                                          'filtered_results.json')

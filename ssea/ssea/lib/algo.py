@@ -5,19 +5,18 @@ Created on Oct 9, 2013
 '''
 import os
 import logging
-import subprocess
 import shutil
 from collections import namedtuple
 from multiprocessing import Process
 import numpy as np
 
 # local imports
-import ssea.cfisher as fisher
-
+import ssea.lib.cfisher as fisher
 from ssea.lib.batch_sort import batch_sort, batch_merge
-from ssea.kernel import ssea_kernel, RandomState
-from base import BOOL_DTYPE, Config, Result, chunk, interp
-from countdata import BigCountMatrix
+from ssea.lib.kernel import ssea_kernel, RandomState
+from ssea.lib.base import BOOL_DTYPE, Result, interp
+from ssea.lib.config import Config
+from ssea.lib.countdata import BigCountMatrix
 
 # results directories
 TMP_DIR = 'tmp'
@@ -359,91 +358,26 @@ def ssea_serial(matrix_dir, shape, sample_sets, config, output_basename,
     os.remove(unsorted_json_file)    
     logging.debug("Worker %s: done" % (output_basename))
 
-def ssea_map(matrix_dir, shape, sample_sets, config, tmp_dir): 
+def ssea_map(matrix_dir, shape, sample_sets, config,
+             worker_basenames, worker_chunks):
     '''
     parallel map step of SSEA run
     
-    breaks input matrix into approximately equal sized chunks and 
-    coordinates execution of subprocesses to process each chunk
-    in parallel
-    
-    returns a list of worker process prefixes corresponding to
-    result chunks
+    processes chunks of input matrix in parallel using multiprocessing
     '''
     # start worker processes
     procs = []
-    chunks = []
-    worker_basenames = []
-    for startrow,endrow in chunk(shape[0], config.num_processes):
-        i = len(procs)
-        logging.debug("Worker process %d range %d-%d (%d total rows)" % 
-                      (i, startrow, endrow, (endrow-startrow)))
-        # worker output files
-        basename = os.path.join(tmp_dir, "w%03d" % (i))
-        worker_basenames.append(basename)
+    for i in xrange(len(worker_basenames)):
+        basename = worker_basenames[i]
+        startrow, endrow = worker_chunks[i]
         args = (matrix_dir, shape, sample_sets, config, 
                 basename, startrow, endrow)        
         p = Process(target=ssea_serial, args=args)
         p.start()
         procs.append(p)
-        chunks.append((startrow,endrow))
     # join worker processes (wait for processes to finish)
     for p in procs:
         p.join()
-    return worker_basenames
-
-
-def _compute_qvalues(hists_file, input_json_file):
-    # load histogram data
-    hists = np.load(hists_file)
-    # compute cumulative sums for fdr interpolation
-    cdfs = {}
-    for k in ('null_nes_neg', 'null_nes_pos', 'obs_nes_neg', 'obs_nes_pos'):
-        h = hists[k]
-        cdf2d = np.zeros((h.shape[0],h.shape[1]+1), dtype=np.float)
-        for j in xrange(h.shape[0]):
-            cdf2d[j,1:] = h[j,:].cumsum()
-        cdfs[k] = cdf2d
-    # parse report json and write new values
-    fin = open(input_json_file, 'r')
-    for line in fin:
-        # load json document (one per line)
-        res = Result.from_json(line.strip())
-        # get relevant columns
-        i = res.ss_id
-        es = res.es
-        log_nes_clip = np.log10(np.clip(abs(res.nes), NES_MIN, NES_MAX))
-        # compute sample set FDR q-values
-        if es < 0:
-            null_key = 'null_nes_neg'
-            obs_key = 'obs_nes_neg'
-        else:
-            null_key = 'null_nes_pos'
-            obs_key = 'obs_nes_pos'
-        # to compute a sample set specific FDR q value we look at the
-        # aggregated enrichment scores for all tests of that sample set
-        # compute the cumulative sums of NES histograms
-        # use interpolation to find fraction NES(null) >= NES* and account for
-        # the observed permutation in the null set
-        # interpolate NES in log space
-        null_nes_cumsum = cdfs[null_key][i]
-        null_n = interp(log_nes_clip, LOG_NES_BINS, null_nes_cumsum)
-        obs_nes_cumsum = cdfs[obs_key][i]
-        obs_n = interp(log_nes_clip, LOG_NES_BINS, obs_nes_cumsum)
-        n = 1.0 - (null_n / null_nes_cumsum[-1])
-        d = 1.0 - (obs_n / obs_nes_cumsum[-1])
-        #print 'SS_ID=%d ES=%f NES=%f n=%f (%f / %f) d=%f (%f / %f)' % (i, res.es, res.nes, n, null_n, null_nes_cumsum[-1], d, obs_n, obs_nes_cumsum[-1])
-        if (n <= 0.0) or (d <= 0.0):
-            ss_fdr_q_value = 0.0
-        else:
-            ss_fdr_q_value = n / d
-        # update json dict
-        res.ss_fdr_q_value = ss_fdr_q_value
-        # convert back to json
-        yield res.to_json()
-    # cleanup
-    fin.close()
-    hists.close()
 
 def compute_qvalues(json_iterator, hists_file, nsets):
     '''
@@ -559,63 +493,3 @@ def ssea_reduce(input_basenames, num_sample_sets, output_json_file,
         os.remove(hist_file)
         json_file = input_basenames[i] + JSON_SORTED_SUFFIX
         os.remove(json_file)
-
-def ssea_main(config, sample_sets, row_metadata, col_metadata):
-    '''
-    config: Config object
-    sample_sets: list of SampleSet objects
-    row_metadata: list of Metadata objects corresponding to rows
-    col_metadata: list of Metadata objects corresponding to columns
-    '''
-    # setup output directory
-    if not os.path.exists(config.output_dir):
-        logging.debug("Creating output directory '%s'" % 
-                      (config.output_dir))
-        os.makedirs(config.output_dir)
-    # create temp directory
-    tmp_dir = os.path.join(config.output_dir, TMP_DIR)
-    if not os.path.exists(tmp_dir):
-        logging.debug("Creating tmp directory '%s'" % (tmp_dir))
-        os.makedirs(tmp_dir)
-    # write row metadata output
-    metadata_file = os.path.join(config.output_dir, 
-                                 Config.METADATA_JSON_FILE)
-    logging.debug("Writing row metadata '%s'" % (metadata_file))
-    with open(metadata_file, 'w') as fp:
-        for m in row_metadata:
-            print >>fp, m.to_json()
-    # write column metadata output
-    samples_file = os.path.join(config.output_dir, 
-                                Config.SAMPLES_JSON_FILE) 
-    logging.debug("Writing column metadata '%s'" % (samples_file))
-    with open(samples_file, 'w') as fp:
-        for m in col_metadata:
-            print >>fp, m.to_json()
-    # write sample sets
-    sample_sets_file = os.path.join(config.output_dir, 
-                                    Config.SAMPLE_SETS_JSON_FILE)
-    with open(sample_sets_file, 'w') as fp:
-        for ss in sample_sets:
-            print >>fp, ss.to_json()
-    # write configuration
-    config_file = os.path.join(config.output_dir, 
-                               Config.CONFIG_JSON_FILE)
-    logging.debug("Writing configuration '%s'" % (config_file))
-    with open(config_file, 'w') as fp:
-        print >>fp, config.to_json()
-    # output files
-    logging.info("Running SSEA with %d available processes" % 
-                 (config.num_processes))
-    shape = (len(row_metadata),len(col_metadata))
-    worker_basenames = ssea_map(config.matrix_dir, shape, sample_sets, 
-                                config, tmp_dir)
-    # use ES null distributions to compute global statistics
-    # and produce a report
-    logging.info("Computing FDR q values")
-    hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
-    json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
-    ssea_reduce(worker_basenames, len(sample_sets), json_file, hists_file)
-    # cleanup
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
-    logging.info("Finished")
