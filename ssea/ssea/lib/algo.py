@@ -419,13 +419,13 @@ def compute_qvalues(json_iterator, hists_file, nrows, nsets):
             null_key = 'null_nes_neg'
             obs_key = 'obs_nes_neg'
             min_fdrs = min_fdrs_neg
-            res.ss_rank = ss_ranks_neg[i]
+            res.ss_rank = int(ss_ranks_neg[i])
             ss_ranks_neg[i] -= 1
         else:
             null_key = 'null_nes_pos'
             obs_key = 'obs_nes_pos'
             min_fdrs = min_fdrs_pos
-            res.ss_rank = ss_ranks_pos[i]
+            res.ss_rank = int(ss_ranks_pos[i])
             ss_ranks_pos[i] -= 1
         # to compute a sample set specific FDR q value we look at the
         # aggregated enrichment scores for all tests of that sample set
