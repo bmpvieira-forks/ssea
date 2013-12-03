@@ -37,8 +37,8 @@ CLUSTER_REDUCE_SCRIPT = 'reduce.pbs'
 CLUSTER_MAPREDUCE_SCRIPT = 'run.pbs'
 
 # cluster walltime computation constants
-MAP_SECS_PER_TEST = 0.001
-REDUCE_SECS_PER_RESULT = 0.01
+SECS_PER_ITER_MAP = 1e-6
+SECS_PER_ITER_REDUCE = 0.01
 HOURS_PER_SEC = (1.0 / 3600.0)
 PADDING_HOURS = 2.0
 
@@ -247,21 +247,22 @@ def ssea_cluster_init(config, ssea_script):
     # write map script
     #
     # calculate job walltime
-    num_tests = (max_chunk_size *
-                 (1 + config.perms + config.resampling_iterations) * 
-                 len(sample_sets))
-    hours = (num_tests * MAP_SECS_PER_TEST * HOURS_PER_SEC)
+    num_tests = (max_chunk_size * shape[1] * len(sample_sets) * 
+                 (1 + config.perms + config.resampling_iterations))
+    hours = (num_tests * SECS_PER_ITER_MAP * HOURS_PER_SEC)
     padded_hours = int(hours + PADDING_HOURS) # padding
-    logging.debug('Map step walltime calculation: %d rows/chunk %d perms %d resamplings %d sample sets' %
-                  (max_chunk_size, config.perms, config.resampling_iterations, len(sample_sets)))
-    logging.debug('Map step will have each worker run the SSEA kernel %d times' % (num_tests))
-    logging.debug('\tAt %fs per test the worker will take %f hours' % (MAP_SECS_PER_TEST, hours))
+    logging.debug('Map step walltime calculation: %d rows/chunk %d '
+                  'samples %d perms %d resamplings %d sample sets' %
+                  (max_chunk_size, shape[1], config.perms, 
+                   config.resampling_iterations, len(sample_sets)))
+    logging.debug('\tAt %fs per iteration the worker will take %f hours' % 
+                  (SECS_PER_ITER_MAP, hours))
     logging.debug('\tPadded walltime is %dh' % (padded_hours))
     # make pbs resource fields
     resource_fields = []
-    resource_fields.append('mem=1gb')
     resource_fields.append('walltime=%d:00:00' % (padded_hours))
     resource_fields.append('nodes=1:ppn=1')
+    resource_fields.append('pmem=1024mb')
     lines = ['#!/bin/bash']
     lines.extend(pbs_script_lines)
     lines.append('#PBS -N %s' % (config.name))
@@ -286,19 +287,18 @@ def ssea_cluster_init(config, ssea_script):
     # write reduce script
     #
     num_results = (shape[0] * len(sample_sets))
-    hours = (num_results * REDUCE_SECS_PER_RESULT * HOURS_PER_SEC)
+    hours = (num_results * SECS_PER_ITER_REDUCE * HOURS_PER_SEC)
     padded_hours = int(hours + PADDING_HOURS) # padding
     logging.debug('Reduce walltime calculation: %d rows and %d sample sets' % 
                   (shape[0], len(sample_sets)))
-    logging.debug('Reduce will compute %d results' % (num_results))
     logging.debug('\tAt %fs per result this will take %f hours' % 
-                  (REDUCE_SECS_PER_RESULT, hours))
+                  (SECS_PER_ITER_REDUCE, hours))
     logging.debug('\tPadded reduce walltime is %dh' % (padded_hours))
     # make pbs resource fields
     resource_fields = []
-    resource_fields.append('mem=4gb')
     resource_fields.append('walltime=%d:00:00' % (padded_hours))
     resource_fields.append('nodes=1:ppn=1')
+    resource_fields.append('pmem=3750mb')
     lines = ['#!/bin/bash']
     lines.extend(pbs_script_lines)
     lines.append('#PBS -N %s' % (config.name))
@@ -350,7 +350,6 @@ def ssea_cluster_map(output_dir):
                 worker_basename, startrow, endrow)
     return 0
 
-
 def ssea_cluster_reduce(output_dir):
     # open JSON files in output directory
     config, sample_sets, shape = _open_output_dir(output_dir)
@@ -368,7 +367,6 @@ def ssea_cluster_reduce(output_dir):
         shutil.rmtree(tmp_dir)
     logging.debug("Done.")
     return 0
-
 
 def main():
     # create instance of run configuration
