@@ -261,7 +261,7 @@ def ssea_cluster_init(config, ssea_script):
     lines.extend(pbs_script_lines)
     lines.append('#PBS -N %s' % (config.name))
     lines.append('#PBS -l %s' % (','.join(resource_fields)))
-    lines.append('#PBS -t 0-%d' % (num_workers))
+    lines.append('#PBS -t 0-%d' % (num_workers-1))
     lines.append('#PBS -V')
     lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'map.stdout')))
     lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'map.stderr')))
@@ -274,7 +274,8 @@ def ssea_cluster_init(config, ssea_script):
     with open(script_file, 'w') as f:
         f.write('\n'.join(lines))
     # submit map job
-    # array_job_id = qsub(lines)
+    job_array_id = qsub(lines)
+    logging.debug('Submitted map job array id=%s' % (job_array_id))
     #
     # write reduce script
     #
@@ -299,6 +300,7 @@ def ssea_cluster_init(config, ssea_script):
     lines.append('#PBS -V')
     lines.append("#PBS -o %s" % (os.path.join(config.output_dir, 'reduce.stdout')))
     lines.append("#PBS -e %s" % (os.path.join(config.output_dir, 'reduce.stderr')))
+    lines.append("#PBS -W depend=afterokarray:%s" % (job_array_id))
     # command line args
     args = ['python', ssea_script, '--cluster-reduce', '-o', config.output_dir]
     lines.append(' '.join(args))
@@ -307,6 +309,8 @@ def ssea_cluster_init(config, ssea_script):
     script_file = os.path.join(config.output_dir, CLUSTER_REDUCE_SCRIPT)
     with open(script_file, 'w') as f:
         f.write('\n'.join(lines))
+    # submit reduce job
+    qsub(lines)
     
     #print lines
     #if deps is not None:
