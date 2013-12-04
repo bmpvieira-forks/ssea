@@ -9,9 +9,19 @@ import unittest
 import numpy as np
 
 # local imports
-import ssea.kernel as kernel
+import ssea.lib.kernel as kernel
 
 class TestLCG(unittest.TestCase):
+
+    def test_lcg_range(self):
+        # magic seed will cause random number generator
+        # to yield a double value of 1.0 and lead to 
+        # array out of bounds exceptions 
+        rng = kernel.RandomState(230538014)
+        try:
+            kernel.shufflei(np.arange(10), rng)
+        except Exception:
+            self.assertFalse(True)
 
     def test_poisson(self):
         x = np.empty(100000, dtype=np.float)

@@ -32,7 +32,12 @@ double lcg_double(int *seedp)
 
 int lcg_range(int *seedp, int a, int b)
 {
-	return(a + (int)((b - a + 1) * lcg_double(seedp)));
+	int seed;
+	double x;
+	seed = lcg_rand(*seedp);
+	*seedp = seed;
+	x = ((double) seed) / ((unsigned int) MODULUS + 1);
+	return(a + (int)((b - a + 1) * x));
 }
 
 /*
