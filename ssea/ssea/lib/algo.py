@@ -357,6 +357,7 @@ def ssea_serial(matrix_dir, shape, sample_sets, config, output_basename,
     # remove unsorted json file
     os.remove(unsorted_json_file)    
     logging.debug("Worker %s: done" % (output_basename))
+    return 0
 
 def ssea_map(matrix_dir, shape, sample_sets, config,
              worker_basenames, worker_chunks):
@@ -378,6 +379,7 @@ def ssea_map(matrix_dir, shape, sample_sets, config,
     # join worker processes (wait for processes to finish)
     for p in procs:
         p.join()
+    return 0
 
 def compute_qvalues(json_iterator, hists_file, nrows, nsets):
     '''
