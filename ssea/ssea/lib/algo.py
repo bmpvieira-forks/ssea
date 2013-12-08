@@ -102,7 +102,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     shape = (config.resampling_iterations, membership.shape[1])    
     resample_es_vals = np.zeros(shape, dtype=np.float) 
     resample_es_ranks = np.zeros(shape, dtype=np.int)
-    resample_nes_vals = np.empty(shape, dtype=np.float)
+    resample_nes_vals = np.ma.empty(shape, dtype=np.float)
     for i in xrange(config.resampling_iterations):
         k = ssea_kernel(counts, size_factors, membership, rng,
                          resample_counts=True,
@@ -135,7 +135,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
         null_es_ranks[i,:] = k.es_ranks
     # default containers for results
     nes_vals = np.empty(membership.shape[1], dtype=np.float)
-    null_nes_vals = np.empty(shape, dtype=np.float)
+    null_nes_vals = np.ma.empty(shape, dtype=np.float)
     pvals = np.empty(membership.shape[1], dtype=np.float)
     fdr_q_values = np.empty(membership.shape[1], dtype=np.float)
     # separate the positive and negative sides of the null distribution
@@ -263,9 +263,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
         res.fisher_p_value = np.round(fisher_p_value, P_VALUE_PRECISION)
         res.odds_ratio = odds_ratio
         # return null distributions for subsequent fdr calculations
-        yield RunResult(j, res, 
-                        null_nes_vals[:,j],
-                        resample_nes_vals[:,j])
+        yield RunResult(j, res, null_nes_vals[:,j].compressed(), 
+                        resample_nes_vals[:,j].compressed())
 
 def ssea_serial(matrix_dir, shape, sample_sets, config, output_basename, 
                 startrow=None, endrow=None):
@@ -406,8 +405,8 @@ def compute_qvalues(json_iterator, hists_file, nrows, nsets):
     min_fdrs_pos = np.ones(nsets, dtype=np.float)
     min_fdrs_neg = np.ones(nsets, dtype=np.float)
     # keep track of the rank of each transcript within the sample set
-    ss_ranks_pos = np.repeat(nrows, nsets)
-    ss_ranks_neg = np.repeat(nrows, nsets)
+    ss_ranks_pos = np.repeat(1, nsets)
+    ss_ranks_neg = np.repeat(-1, nsets)
     # perform merge of sorted json files 
     for line in json_iterator:
         # load json document (one per line)
@@ -428,7 +427,7 @@ def compute_qvalues(json_iterator, hists_file, nrows, nsets):
             obs_key = 'obs_nes_pos'
             min_fdrs = min_fdrs_pos
             res.ss_rank = int(ss_ranks_pos[i])
-            ss_ranks_pos[i] -= 1
+            ss_ranks_pos[i] += 1
         # to compute a sample set specific FDR q value we look at the
         # aggregated enrichment scores for all tests of that sample set
         # compute the cumulative sums of NES histograms
