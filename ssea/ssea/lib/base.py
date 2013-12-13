@@ -5,11 +5,11 @@ Created on Oct 18, 2013
 '''
 import logging
 import json
-import itertools
 import numpy as np
 
-BOOL_DTYPE = np.uint8
+INT_DTYPE = np.int
 FLOAT_DTYPE = np.float
+MISSING_VALUE = -1
 
 class WeightMethod:
     UNWEIGHTED = 0
@@ -114,166 +114,57 @@ class ParserError(Exception):
     def __unicode__(self):
         return self.msg
 
-class Metadata(object):
-    __slots__ = ('_id', 'name', 'params')
-    
-    def __init__(self, _id=None, name=None, params=None):
-        '''
-        _id: unique integer id
-        name: string name
-        params: dictionary of parameter-value data
-        '''
-        self._id = _id
-        self.name = name
-        self.params = {}
-        if params is not None:
-            self.params.update(params)
-
-    def __repr__(self):
-        return ("<%s(_id=%d,name=%s,params=%s>" % 
-                (self.__class__.__name__, self._id, self.name, 
-                 self.params))
-    def __eq__(self, other):
-        return self._id == other._id
-    def __ne__(self, other):
-        return self._id != other._id
-    def __hash__(self):
-        return hash(self._id)
-
-    def to_json(self):
-        d = dict(self.params)
-        d.update({'_id': self._id,
-                  'name': self.name})
-        return json.dumps(d)
-    
-    @staticmethod
-    def from_json(s):
-        d = json.loads(s)
-        m = Metadata()
-        m._id = d.pop('_id')
-        m.name = d.pop('name')
-        m.params = d
-        return m
-    
-    @staticmethod
-    def from_dict(d):
-        m = Metadata()
-        m._id = d.pop('_id')
-        m.name = d.pop('name')
-        m.params = d
-        return m
-    
-    
-    @staticmethod
-    def parse_json(filename):
-        with open(filename, 'r') as fp:
-            for line in fp:
-                yield Metadata.from_json(line.strip())
-
-    @staticmethod
-    def parse_tsv(filename, names, id_iter=None):
-        '''
-        parse tab-delimited file containing sample information        
-        first row contains column headers
-        first column must contain sample name
-        remaining columns contain metadata
-        '''
-        if id_iter is None:
-            id_iter = itertools.count()
-        # read entire metadata file
-        metadict = {}
-        with open(filename) as fileh:
-            header_fields = fileh.next().strip().split('\t')[1:]
-            for line in fileh:
-                fields = line.strip().split('\t')
-                name = fields[0]            
-                metadict[name] = fields[1:]
-        # join with names
-        for name in names:
-            if name not in metadict:
-                logging.error("Name %s not found in metadata" % (name))
-            assert name in metadict
-            fields = metadict[name]
-            metadata = dict(zip(header_fields,fields))
-            yield Metadata(id_iter.next(), name, metadata)        
-
 class SampleSet(object): 
-    def __init__(self, _id=None, name=None, desc=None, sample_ids=None):
+    DTYPE = np.int
+    MISSING_VALUE = -1
+    
+    def __init__(self, name=None, desc=None, values=None):
         '''
-        _id: unique integer id (will be auto-generated if not provided)
         name: string name of sample set
         desc: string description of sample set 
-        sample_ids: list of unique integer ids corresponding to samples
+        values: list of tuples of (sample_name,0 or 1) for 
+        valid samples in this set
         '''
-        self._id = _id
         self.name = name
         self.desc = desc
-        self.sample_ids = set()
-        if sample_ids is not None:
-            self.sample_ids.update(sample_ids)
+        self.value_dict = {}
+        if values is not None:
+            for sample,value in values:
+                value = int(value)
+                assert (value == 0) or (value == 1)
+                self.value_dict[sample] = value
 
     def __repr__(self):
-        return ("<%s(_id=%d,name=%s,desc=%s,sample_ids=%s" % 
+        return ("<%s(name=%s,desc=%s,value_dict=%s" % 
                 (self.__class__.__name__, self._id, self.name, self.desc,
-                 self.sample_ids))
-    
+                 str(self.value_dict)))
+        
     def __len__(self):
-        return len(self.sample_ids)
-
-    def get_array(self, all_ids):
-        return np.array([x in self.sample_ids for x in all_ids], 
-                        dtype=BOOL_DTYPE)
-
-    def to_json(self):
-        d = {'_id': self._id,
-             'name': self.name,
-             'desc': self.desc,
-             'sample_ids': list(self.sample_ids)}
-        return json.dumps(d)
-
-    @staticmethod
-    def from_json(s):
-        d = json.loads(s)
-        ss = SampleSet(**d)
-        return ss
-        
-
+        return sum(self.value_dict.itervalues())
     
-    @staticmethod
-    def parse_json(filename):
-        with open(filename, 'r') as fp:
-            for line in fp:
-                yield SampleSet.from_json(line.strip())
+    def get_array(self, samples):
+        return np.array([self.value_dict.get(x, MISSING_VALUE) 
+                         for x in samples], dtype=SampleSet.DTYPE)
+
+    def to_json(self, samples):
+        d = {'name': self.name,
+             'desc': self.desc,
+             'membership': self.get_array(samples)}
+        return json.dumps(d, cls=NumpyJSONEncoder)
 
     @staticmethod
-    def remove_duplicates(sample_sets):
+    def parse_smx(filename, sep='\t'):
         '''
-        compare all sample sets and remove duplicates
-        
-        sample_sets: list of SampleSet objects
+        filename: smx (column) formatted file
         '''
-        # TODO: write this
-        pass
-
-    @staticmethod
-    def parse_smx(filename, samples, id_iter=None):
-        '''
-        filename: smx formatted file
-        samples: list of all samples in the experiment
-        '''
-        if id_iter is None:
-            id_iter = itertools.count()
         fileh = open(filename)
-        names = fileh.next().rstrip('\n').split('\t')
-        descs = fileh.next().rstrip('\n').split('\t')
+        names = fileh.next().rstrip('\n').split(sep)[1:]
+        descs = fileh.next().rstrip('\n').split(sep)[1:]
         if len(names) != len(descs):
             raise ParserError('Number of fields in differ in columns 1 and 2 '
                               'of sample set file')
-        # get name -> _id map of samples
-        name_id_map = dict((s.name, s._id) for s in samples)
         # create empty sample sets
-        sample_sets = [SampleSet(id_iter.next(),n,d) 
-                       for n,d in zip(names,descs)]
+        sample_sets = [SampleSet(n,d) for n,d in zip(names,descs)]
         lineno = 3
         for line in fileh:
             if not line:
@@ -281,56 +172,48 @@ class SampleSet(object):
             line = line.rstrip('\n')
             if not line:
                 continue
-            fields = line.split('\t')
-            for i,name in enumerate(fields):
-                if not name:
+            fields = line.split(sep)
+            sample = fields[0]
+            for i,value in enumerate(fields[1:]):
+                if not value:
                     continue
-                if name not in name_id_map:
-                    logging.warning('Unrecognized sample name "%s" in '
-                                    'sample set "%s"' 
-                                    % (name, sample_sets[i].name))
-                    continue
-                sample_id = name_id_map[name]
-                sample_sets[i].sample_ids.add(sample_id)
+                value = int(value)
+                sample_sets[i].value_dict[sample] = value
             lineno += 1
         fileh.close()
         return sample_sets
 
     @staticmethod
-    def parse_smt(filename, samples, id_iter=None):
+    def parse_smt(filename, sep='\t'):
         '''
-        filename: smt formatted file
-        samples: list of all samples in the experiment
+        filename: smt (row) formatted file
         '''
-        if id_iter is None:
-            id_iter = itertools.count()
-        # get name -> _id map of samples
-        name_id_map = dict((s.name, s._id) for s in samples)
         sample_sets = []
         fileh = open(filename)
+        samples = fileh.next().strip().split(sep)[2:]
         for line in fileh:
-            fields = line.strip().split('\t')
+            fields = line.strip().split(sep)
             name = fields[0]
             desc = fields[1]
-            sample_ids = []
-            for sample_name in fields[2:]:
-                if sample_name not in name_id_map:
-                    logging.warning('Unrecognized sample name "%s" in '
-                                    'sample set "%s"' 
-                                    % (sample_name, name))
+            values = []
+            for i in xrange(2, len(fields)):
+                value = fields[i]
+                if not value:
                     continue
-                sample_ids.append(name_id_map[sample_name])
-            sample_sets.append(SampleSet(id_iter.next(), name, desc, sample_ids))
+                value = int(value)
+                values.append((samples[i],value))
+            sample_sets.append(SampleSet(name, desc, values))
         fileh.close()
         return sample_sets
-    
+
 class Result(object):
-    FIELDS = ('row_id', 'ss_id', 'rand_seed', 'es', 'es_rank', 'nominal_p_value',
+    MAX_POINTS = 100
+    FIELDS = ('t_id', 'rand_seed', 'es', 'es_rank', 'nominal_p_value',
               'core_hits', 'core_misses', 'null_hits', 'null_misses',
-              'fisher_p_value', 'odds_ratio', 'nes',
-              'fdr_q_value', 'ss_fdr_q_value', 'ss_rank',
-              'resample_es_vals', 'resample_es_ranks', 
-              'null_es_vals', 'null_es_ranks', 'null_es_hist')
+              'fisher_p_value', 'odds_ratio', 'nes', 'ss_fdr_q_value', 
+              'ss_rank', 'ss_percentile', 'resample_es_vals', 
+              'resample_es_ranks', 'null_es_vals', 'null_es_ranks', 
+              'null_es_mean')
     
     def __init__(self):
         for x in Result.FIELDS:
@@ -344,4 +227,30 @@ class Result(object):
         d = json.loads(s)
         res = Result()
         res.__dict__ = d
+        return res
+
+    @staticmethod
+    def default():
+        '''setup a Result object with default (non-significant) values'''
+        res = Result()
+        res.t_id = None
+        res.rand_seed = None
+        res.es = 0.0
+        res.es_rank = 0
+        res.nominal_p_value = 1.0
+        res.core_hits = 0
+        res.core_misses = 0
+        res.null_hits = 0
+        res.null_misses = 0
+        res.fisher_p_value = 1.0
+        res.odds_ratio = 1.0
+        res.nes = 0.0
+        res.ss_fdr_q_value = 1.0
+        res.ss_rank = None
+        res.ss_frac = 0.0
+        res.resample_es_vals = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
+        res.resample_es_ranks = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
+        res.null_es_vals = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
+        res.null_es_ranks = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
+        res.null_es_mean = 0.0
         return res

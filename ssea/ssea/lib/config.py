@@ -4,13 +4,12 @@ Created on Dec 2, 2013
 @author: mkiyer
 '''
 import os
+import copy
 import logging
 import argparse
 import json
 from datetime import datetime
 from time import time
-# third-party packages
-import numpy as np
 # local imports
 from ssea.lib.base import WeightMethod, WEIGHT_METHODS, WEIGHT_METHOD_STR
 
@@ -19,28 +18,19 @@ def timestamp():
 
 class Config(object):
     # constants
-    MAX_ES_POINTS = 100
-    NUM_NULL_ES_BINS = 101
-    NULL_ES_BINS = np.linspace(-1.0, 1.0, num=NUM_NULL_ES_BINS)
     DEFAULT_SMIN = 1
     DEFAULT_SMAX = 0
-    DEFAULT_NA_VALUE = 'NA'
-    SAMPLES_JSON_FILE = 'samples.json'
-    METADATA_JSON_FILE = 'metadata.json'
-    SAMPLE_SETS_JSON_FILE = 'sample_sets.json'
     CONFIG_JSON_FILE = 'config.json'
-    MATRIX_DIR = 'matrix'
+    SAMPLE_SET_JSON_FILE = 'sample_set.json'
     RESULTS_JSON_FILE = 'results.json'
     OUTPUT_HISTS_FILE = 'hists.npz'
-    TMP_DIR = 'tmp'
     LOG_DIR = 'log'
     
     def __init__(self):
         self.num_processes = 1
         self.output_dir = "SSEA_%s" % (timestamp())
-        self.name = 'myssea'
         self.perms = 1000
-        self.resampling_iterations = 100
+        self.resampling_iterations = 101
         self.weight_miss = WeightMethod.LOG
         self.weight_hit = WeightMethod.LOG
         self.weight_param = 1.0
@@ -50,11 +40,7 @@ class Config(object):
         self.smax = Config.DEFAULT_SMAX
         self.smx_files = []
         self.smt_files = []
-        self.col_metadata_file = None
-        self.row_metadata_file = None
         self.matrix_dir = None
-        self.matrix_tsv_file = None
-        self.matrix_na_values = [Config.DEFAULT_NA_VALUE]
         # for running on pbs cluster
         self.cluster = None
         self.pbs_script = None
@@ -87,16 +73,14 @@ class Config(object):
         parser.add_argument("-v", "--verbose", dest="verbose", 
                             action="store_true", default=False, 
                             help="set verbosity level [default: %(default)s]")
+        parser.add_argument('-p', '--num-processes', dest='num_processes',
+                            type=int, default=1,
+                            help='Number of processor cores available '
+                            '[default=%(default)s]')
         grp = parser.add_argument_group('Output Options')
         grp.add_argument('-o', '--output-dir', dest="output_dir", 
                          help='Output directory [default=%(default)s]')
-        grp.add_argument('-n', '--name', dest="name", default=self.name,
-                         help='Analysis name [default=%(default)s]')        
         grp = parser.add_argument_group('Cluster Computing Options')
-        grp.add_argument('-p', '--num-processes', dest='num_processes',
-                         type=int, default=1,
-                         help='Number of processor cores available '
-                         '[default=%(default)s]')
         clustergrp = grp.add_mutually_exclusive_group()
         clustergrp.add_argument('--cluster', dest='cluster', 
                                 action='store_const', const='setup',
@@ -135,34 +119,20 @@ class Config(object):
                          help='Exclude sample sets smaller than N '
                          'from the analysis [default=%(default)s]')
         grp.add_argument('--smax', dest="smax", type=int,
-                            default=self.smax, metavar="N",
-                            help='Exclude sample sets larger than N '
-                            'from the analysis [default=%(default)s]')
+                         default=self.smax, metavar="N",
+                         help='Exclude sample sets larger than N '
+                         'from the analysis [default=%(default)s]')
         grp.add_argument('--smx', dest="smx_files", action='append',
-                            help='File(s) containing sets in column format')
+                         help='File(s) containing sets in column format')
         grp.add_argument('--smt', dest="smt_files", action='append',
-                            help='File(s) containing sets in row format')
-        grp.add_argument('--colmeta', dest='col_metadata_file',
-                            help='file containing metadata corresponding to each '
-                            'column of the weight matrix file')
-        grp.add_argument('--rowmeta', dest='row_metadata_file',
-                            help='file containing metadata corresponding to each '
-                            'row of the weight matrix file')
-        grp.add_argument('--na-value', dest='matrix_na_values', 
-                            default=self.matrix_na_values, action='append',
-                            help='Value to interpret as missing/invalid '
-                            'in weight matrix [default=%(default)s]')
-        grp2 = grp.add_mutually_exclusive_group()
-        grp2.add_argument('--tsv', dest='tsv_file', default=None, 
-                         help='Tab-delimited text file containing data matrix')
-        grp2.add_argument('--matrix', dest='matrix_dir', default=None, 
-                         help='Directory with binary memory-mapped matrix files')
+                         help='File(s) containing sets in row format')
+        grp.add_argument('--matrix', dest='matrix_dir', default=None, 
+                         help='Directory with binary memory-mapped count matrix files')
         return parser
 
     def log(self, log_func=logging.info):
         log_func("Parameters")
         log_func("----------------------------------")
-        log_func("name:                    %s" % (self.name))
         log_func("num processes:           %d" % (self.num_processes))
         log_func("permutations:            %d" % (self.perms))
         log_func("weight method miss:      %s" % (WEIGHT_METHOD_STR[self.weight_miss]))
@@ -202,11 +172,7 @@ class Config(object):
         self.pbs_script = args.pbs_script
         # output directory
         self.output_dir = os.path.abspath(args.output_dir)
-        if os.path.exists(self.output_dir):
-            parser.error("output directory '%s' already exists" % 
-                         (self.output_dir))
         # process and check arguments
-        self.name = args.name
         self.num_processes = args.num_processes
         self.perms = max(1, args.perms)
         # sample set size limits
@@ -225,25 +191,9 @@ class Config(object):
                 parser.error('weight param %f < 1.0 not allowed with '
                              'log methods' % (self.weight_param))
         # matrix input directory
-        if args.matrix_dir is not None:
-            if not os.path.exists(args.matrix_dir):
-                parser.error('matrix path "%s" not found' % (args.matrix_dir))
-            self.matrix_dir = os.path.abspath(args.matrix_dir)
-        if args.tsv_file is not None:
-            if not os.path.exists(args.tsv_file):
-                parser.error('matrix tsv file "%s" not found' % (args.tsv_file))
-            self.matrix_tsv_file = args.tsv_file
-            self.matrix_na_values = args.matrix_na_values
-            self.matrix_dir = os.path.join(os.path.abspath(self.output_dir), Config.MATRIX_DIR)
-        # check metadata
-        if args.row_metadata_file is not None:
-            if not os.path.exists(args.row_metadata_file):
-                parser.error('row metadata file "%s" not found' % (args.row_metadata_file))
-            self.row_metadata_file = os.path.abspath(args.row_metadata_file)
-        if args.col_metadata_file is not None:
-            if not os.path.exists(args.col_metadata_file):
-                parser.error('col metadata file "%s" not found' % (args.col_metadata_file))
-            self.col_metadata_file = os.path.abspath(args.col_metadata_file)
+        if not os.path.exists(args.matrix_dir):
+            parser.error('matrix path "%s" not found' % (args.matrix_dir))
+        self.matrix_dir = os.path.abspath(args.matrix_dir)
         # check sample sets
         if args.smx_files is not None:
             for filename in args.smx_files:

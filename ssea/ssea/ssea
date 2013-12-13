@@ -18,7 +18,6 @@ Assessment of enrichment in a ranked list of quantitative measurements
 import sys
 import os
 import logging
-import itertools
 import shutil
 
 __all__ = []
@@ -27,7 +26,7 @@ PROFILE = 0
 
 # local imports
 from ssea.lib.config import Config 
-from ssea.lib.base import SampleSet, Metadata, chunk
+from ssea.lib.base import SampleSet, chunk
 from ssea.lib.countdata import BigCountMatrix
 from ssea.lib.algo import ssea_map, ssea_reduce, ssea_serial
 
@@ -42,54 +41,21 @@ SECS_PER_ITER_REDUCE = 0.01
 HOURS_PER_SEC = (1.0 / 3600.0)
 PADDING_HOURS = 2.0
 
-def init(config):
+def read_sample_sets(config):
     '''
-    creates a skeleton SSEA output directory with config, metadata, 
-    and sample sets stored as JSON files
-    
     config: ssea.lib.Config object with SSEA options specified
+    
+    returns list of SampleSet objects
     '''
-    # read/process weight matrix
-    if config.matrix_tsv_file is not None:
-        logging.info("Converting text matrix file to binary format")
-        if not os.path.exists(config.matrix_dir):
-            os.makedirs(config.matrix_dir)
-        bm = BigCountMatrix.from_tsv(config.matrix_tsv_file, 
-                                     config.matrix_dir, 
-                                     na_values=config.matrix_na_values)
-        bm.estimate_size_factors('deseq')
-    else:
-        bm = BigCountMatrix.open(config.matrix_dir)
-        if bm.size_factors is None:
-            bm.estimate_size_factors('deseq')
-    # read metadata
-    if config.row_metadata_file is not None:
-        logging.info("Reading row metadata")
-        row_metadata = list(Metadata.parse_tsv(config.row_metadata_file, bm.rownames))
-    else:
-        id_iter = itertools.count()
-        row_metadata = [Metadata(id_iter.next(), x) for x in bm.rownames]
-    if config.col_metadata_file is not None:
-        logging.info("Reading column metadata")
-        col_metadata = list(Metadata.parse_tsv(config.col_metadata_file, bm.colnames))
-    else:
-        id_iter = itertools.count()
-        col_metadata = [Metadata(id_iter.next(), x) for x in bm.colnames]
-    shape = (len(row_metadata), len(col_metadata))
-    # setup output directory
-    if not os.path.exists(config.output_dir):
-        logging.info("Creating output directory '%s'" % 
-                     (config.output_dir))
-        os.makedirs(config.output_dir)
     # read sample sets
     logging.info("Reading sample sets")
     sample_sets = []
     for filename in config.smx_files:
         logging.debug("\tFile: %s" % (filename))
-        sample_sets.extend(SampleSet.parse_smx(filename, col_metadata))
+        sample_sets.extend(SampleSet.parse_smx(filename))
     for filename in config.smt_files:
         logging.debug("\tFile: %s" % (filename))
-        sample_sets.extend(SampleSet.parse_smt(filename, col_metadata))
+        sample_sets.extend(SampleSet.parse_smt(filename))
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:
@@ -106,79 +72,77 @@ def init(config):
         filtered_sample_sets.append(sample_set)
     logging.info("\tNumber of filtered sample sets: %d" % 
                  (len(filtered_sample_sets)))
-    # TODO: remove duplicate sample sets
     sample_sets = filtered_sample_sets
-    # re-assign contiguous identifiers
-    for i,sample_set in enumerate(sample_sets):
-        sample_set._id = i    
-    # write row metadata output
-    metadata_file = os.path.join(config.output_dir, 
-                                 Config.METADATA_JSON_FILE)
-    logging.debug("Writing row metadata '%s'" % (metadata_file))
-    with open(metadata_file, 'w') as fp:
-        for m in row_metadata:
-            print >>fp, m.to_json()
-    # write column metadata output
-    samples_file = os.path.join(config.output_dir, 
-                                Config.SAMPLES_JSON_FILE) 
-    logging.debug("Writing column metadata '%s'" % (samples_file))
-    with open(samples_file, 'w') as fp:
-        for m in col_metadata:
-            print >>fp, m.to_json()
-    # write sample sets
-    sample_sets_file = os.path.join(config.output_dir, 
-                                    Config.SAMPLE_SETS_JSON_FILE)
-    with open(sample_sets_file, 'w') as fp:
-        for ss in sample_sets:
-            print >>fp, ss.to_json()
-    # write configuration
-    config_file = os.path.join(config.output_dir, 
-                               Config.CONFIG_JSON_FILE)
-    logging.debug("Writing configuration '%s'" % (config_file))
-    with open(config_file, 'w') as fp:
-        print >>fp, config.to_json()
-    # return essential objects needed to run ssea
-    return config, sample_sets, shape
+    return sample_sets
 
-def ssea_mapreduce(config, sample_sets, shape):
+
+def ssea_mapreduce(config):
     '''
-    multiprocessing map/reduce implementation of ssea 
-    
-    call after initializing an output directory using 'init' (see above)
+    multiprocessing map/reduce implementation of ssea    
     '''
-    # create temp directory
-    tmp_dir = os.path.join(config.output_dir, Config.TMP_DIR)
-    if not os.path.exists(tmp_dir):
-        logging.debug("Creating tmp directory '%s'" % (tmp_dir))
-        os.makedirs(tmp_dir)
-    # map work into chunks
-    worker_basenames = []
-    worker_chunks = []
-    for startrow,endrow in chunk(shape[0], config.num_processes):
-        i = len(worker_basenames)
-        logging.debug("Worker process %d range %d-%d (%d total rows)" % 
-                      (i, startrow, endrow, (endrow-startrow)))
-        # worker output files
-        basename = os.path.join(tmp_dir, "w%d" % (i))
-        worker_basenames.append(basename)
-        worker_chunks.append((startrow, endrow))
-    # output files
-    logging.info("Running SSEA map step with %d parallel processes " % 
-                 (len(worker_basenames)))
-    # map step
-    ssea_map(config.matrix_dir, shape, sample_sets, config,
-             worker_basenames, worker_chunks)
-    # reduce step
-    logging.info("Computing FDR q values")
-    hists_file = os.path.join(config.output_dir, Config.OUTPUT_HISTS_FILE)
-    json_file = os.path.join(config.output_dir, Config.RESULTS_JSON_FILE)
-    ssea_reduce(worker_basenames, shape[0], len(sample_sets), json_file, 
-                hists_file)
+    # create output directory
+    if not os.path.exists(config.output_dir):
+        logging.debug("Creating output directory '%s'" % (config.output_dir))
+        os.makedirs(config.output_dir)
+    # read/process weight matrix
+    bm = BigCountMatrix.open(config.matrix_dir)
+    if bm.size_factors is None:
+        logging.debug("No size factors found in count matrix.. estimating")
+        bm.estimate_size_factors('deseq')
+    shape = bm.shape
+    # read/process sample sets
+    sample_sets = read_sample_sets(config)
+    for i,sample_set in enumerate(sample_sets):
+        logging.info("Sample Set: %s" % (sample_set.name))
+        # create sample set directory
+        sample_set_dir = os.path.join(config.output_dir, 'sample_set_%d' % (i))
+        if not os.path.exists(sample_set_dir):
+            logging.debug("Creating sample set directory '%s'" % (sample_set_dir))
+            os.makedirs(sample_set_dir)
+        # create temp directory
+        tmp_dir = os.path.join(sample_set_dir, 'tmp')
+        if not os.path.exists(tmp_dir):
+            logging.debug("Creating tmp directory '%s'" % (tmp_dir))
+            os.makedirs(tmp_dir)            
+        # write configuration file
+        logging.debug("Writing configuration file")
+        config_file = os.path.join(sample_set_dir, Config.CONFIG_JSON_FILE) 
+        with open(config_file, 'w') as fp:
+            print >>fp, config.to_json()
+        # write sample set file
+        logging.debug("Writing sample set file")
+        sample_set_file = os.path.join(sample_set_dir, Config.SAMPLE_SET_JSON_FILE) 
+        with open(sample_set_file, 'w') as fp:
+            print >>fp, sample_set.to_json(bm.colnames) 
+        # map work into chunks
+        worker_basenames = []
+        worker_chunks = []
+        for startrow,endrow in chunk(shape[0], config.num_processes):
+            i = len(worker_basenames)
+            logging.debug("Worker process %d range %d-%d (%d total rows)" % 
+                          (i, startrow, endrow, (endrow-startrow)))
+            # worker output files
+            basename = os.path.join(tmp_dir, "w%d" % (i))
+            worker_basenames.append(basename)
+            worker_chunks.append((startrow, endrow))
+        # output files
+        logging.info("Running SSEA map step with %d parallel processes " % 
+                     (len(worker_basenames)))
+        # map step
+        ssea_map(config, sample_set, worker_basenames, worker_chunks)
+        # reduce step
+        logging.info("Computing FDR q values")
+        hists_file = os.path.join(sample_set_dir, Config.OUTPUT_HISTS_FILE)
+        json_file = os.path.join(sample_set_dir, Config.RESULTS_JSON_FILE)
+        ssea_reduce(worker_basenames, shape[0], json_file, hists_file)
+        # cleanup
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir)
+        logging.debug("Sample Set '%s' Done." % (sample_set.name))
     # cleanup
-    if os.path.exists(tmp_dir):
-        shutil.rmtree(tmp_dir)
-    logging.debug("Done.")
+    bm.close()
     return 0
+
 
 def _open_output_dir(output_dir):
     # read config
@@ -390,7 +354,7 @@ def main():
             retcode = 0
     else:
         # run ssea
-        retcode = ssea_mapreduce(*init(config))
+        retcode = ssea_mapreduce(config)
     return retcode
 
 if __name__ == "__main__":
