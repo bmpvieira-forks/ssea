@@ -170,8 +170,9 @@ def ssea_cluster_init(config, ssea_script):
     sample_sets = read_sample_sets(config)
     for i,sample_set in enumerate(sample_sets):
         logging.info("Sample Set: %s" % (sample_set.name))
+        job_name = 'sample_set_%d' % (i)
         # create sample set directory
-        sample_set_dir = os.path.join(config.output_dir, 'sample_set_%d' % (i))
+        sample_set_dir = os.path.join(config.output_dir, job_name)
         if not os.path.exists(sample_set_dir):
             logging.debug("Creating sample set directory '%s'" % (sample_set_dir))
             os.makedirs(sample_set_dir)
@@ -229,7 +230,7 @@ def ssea_cluster_init(config, ssea_script):
         # write map script
         lines = ['#!/bin/bash']
         lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (sample_set.name))
+        lines.append('#PBS -N %s' % (job_name))
         lines.append('#PBS -l %s' % (','.join(resource_fields)))
         lines.append('#PBS -t 0-%d' % (num_workers-1))
         lines.append('#PBS -V')
@@ -262,7 +263,7 @@ def ssea_cluster_init(config, ssea_script):
         resource_fields.append('pmem=3750mb')
         lines = ['#!/bin/bash']
         lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (sample_set.name))
+        lines.append('#PBS -N %s' % (job_name))
         lines.append('#PBS -l %s' % (','.join(resource_fields)))
         lines.append('#PBS -V')
         lines.append("#PBS -o %s" % (os.path.join(log_dir, 'reduce.stdout')))
