@@ -149,8 +149,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
     # estimate nominal p value for S from ES(S,null) by using the
     # positive or negative portion of the distribution corresponding
     # to the sign of the observed ES(S)
-    p_value = (np.fabs(null_es_vals) >= es_val).sum().astype(np.float)
-    p_value /= null_es_vals.shape[0] 
+    p_value = (np.fabs(null_es_vals) >= np.fabs(es_val)).sum().astype(np.float)
+    p_value /= null_es_vals.shape[0]
     # Create result object for this SSEA test
     res = Result()
     res.rand_seed = rand_seed

@@ -11,6 +11,7 @@ import argparse
 import logging
 import shutil
 import re
+import itertools
 from multiprocessing import Process, Queue
 
 # set matplotlib backend
@@ -95,7 +96,13 @@ class ReportConfig(object):
         log_func("thresholds:              %s" % (','.join(''.join(map(str,t)) for t in self.thresholds)))
         log_func("----------------------------------")
 
-    def parse_args(self, parser, args):
+    @staticmethod
+    def parse_args(parser=None):
+        # create Config instance
+        self = Config()
+        # parse command line arguments
+        parser = self.get_argument_parser(parser)
+        args = parser.parse_args()
         # process and check arguments
         self.create_html = args.create_html
         self.create_pdf = args.create_pdf
@@ -129,7 +136,7 @@ class ReportConfig(object):
             parser.error("Row metadata file '%s' not found" % (args.row_metadata_file))
         self.col_metadata_file = os.path.abspath(args.col_metadata_file)
         self.row_metadata_file = os.path.abspath(args.row_metadata_file)
-
+        return self
 
 class SSEAData:
     def get_details_table(self, sample_metadata):
@@ -242,30 +249,6 @@ def plot_enrichment(result, sseadata,
     fig.tight_layout()
     return fig
 
-def plot_null_distribution(es, es_null_bins, null_es_hist, 
-                           fig=None):
-    if fig is None:
-        fig = plt.Figure()
-    else:
-        fig.clf()
-    # get coords of bars    
-    left = es_null_bins[:-1]
-    height = null_es_hist
-    width = [(r-l) for l,r in zip(es_null_bins[:-1],es_null_bins[1:])]
-    # make plot
-    ax = fig.add_subplot(1,1,1)
-    ax.bar(left, height, width)
-    ax.axvline(x=es, linestyle='--', color='black')
-    ax.set_title('Random ES distribution')
-    ax.set_ylabel('P(ES)')
-    # calculate percent neg
-    percent_neg = 100.0 * sum(null_es_hist[i] for i in xrange(len(null_es_hist))
-                              if es_null_bins[i] < 0)
-    percent_neg /= float(sum(null_es_hist))
-    ax.set_xlabel('ES (Sets with neg scores: %.1f%%)' % 
-                  (percent_neg))
-    return fig
-
 def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set, 
                            reportconfig):
     '''
@@ -288,18 +271,6 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
         eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_pdf))
         d['eplot_pdf'] = eplot_pdf
-    # null distribution plot
-    fig = plot_null_distribution(result.es, 
-                                 Config.NULL_ES_BINS,
-                                 result.null_es_hist,
-                                 fig=global_fig)
-    nplot_png = '%s.%s.null.png' % (rowmeta.name, sample_set.name)
-    fig.savefig(os.path.join(reportconfig.output_dir, nplot_png))        
-    d['nplot_png'] = nplot_png
-    if reportconfig.create_pdf:    
-        nplot_pdf = '%s.%s.null.pdf' % (rowmeta.name, sample_set.name)
-        fig.savefig(os.path.join(reportconfig.output_dir, nplot_pdf))
-        d['nplot_pdf'] = nplot_pdf
     # write tab-delimited details file
     details_rows = sseadata.get_details_table(colmeta)
     details_tsv = '%s.%s.tsv' % (rowmeta.name, sample_set.name)
@@ -460,49 +431,57 @@ def create_html_report(input_file, output_file, row_metadata, sample_set,
                              params=allparams,
                              results=_result_parser(input_file))
 
-def report(config):
+def report(reportconfig):
     # create output dir
-    if not os.path.exists(config.output_dir):
-        logging.debug("Creating output dir '%s'" % (config.output_dir))
-        os.makedirs(config.output_dir)
+    if not os.path.exists(reportconfig.output_dir):
+        logging.debug("Creating output dir '%s'" % (reportconfig.output_dir))
+        os.makedirs(reportconfig.output_dir)
     # create directory for static web files (CSS, javascript, etc)
-    if config.create_html:
-        web_dir = os.path.join(config.output_dir, 'web')
+    if reportconfig.create_html:
+        web_dir = os.path.join(reportconfig.output_dir, 'web')
         if not os.path.exists(web_dir):
             logging.debug("Installing web files")
             shutil.copytree(SRC_WEB_PATH, web_dir)
     # link to input files
-    sample_set_json_file = os.path.join(config.input_dir,
+    sample_set_json_file = os.path.join(reportconfig.input_dir,
                                         Config.SAMPLE_SET_JSON_FILE)
     sample_set = SampleSet.parse_json(sample_set_json_file)
-    config_json_file = os.path.join(config.input_dir, 
+    config_json_file = os.path.join(reportconfig.input_dir, 
                                     Config.CONFIG_JSON_FILE)
-    runconfig = Config.parse_json(config_json_file)
-    # load metadata
-    bm = BigCountMatrix.open(runconfig.matrix_dir)
-    logging.info("Reading row metadata")
-    row_metadata = list(Metadata.parse_tsv(config.row_metadata_file, bm.rownames))
-    logging.info("Reading column metadata")
-    col_metadata = list(Metadata.parse_tsv(config.col_metadata_file, bm.colnames))
+    sseaconfig = Config.parse_json(config_json_file)
+    # read metadata
+    bm = BigCountMatrix.open(sseaconfig.matrix_dir)
+    if reportconfig.row_metadata_file is not None:
+        logging.info("Reading row metadata")
+        row_metadata = list(Metadata.parse_tsv(reportconfig.row_metadata_file, bm.rownames))
+    else:
+        id_iter = itertools.count()
+        row_metadata = [Metadata(id_iter.next(), x) for x in bm.rownames]
+    if reportconfig.col_metadata_file is not None:
+        logging.info("Reading column metadata")
+        col_metadata = list(Metadata.parse_tsv(reportconfig.col_metadata_file, bm.colnames))
+    else:
+        id_iter = itertools.count()
+        col_metadata = [Metadata(id_iter.next(), x) for x in bm.colnames]    
     bm.close()
     # write filtered results to output file
-    filtered_results_file = os.path.join(config.output_dir, 
+    filtered_results_file = os.path.join(reportconfig.output_dir, 
                                          'filtered_results.json')
     # produce detailed reports
-    if config.num_processes > 1:
-        logging.debug("Creating detailed reports in parallel with %d processes" % (config.num_processes))
+    if reportconfig.num_processes > 1:
+        logging.debug("Creating detailed reports in parallel with %d processes" % (reportconfig.num_processes))
         report_parallel(filtered_results_file, row_metadata, col_metadata, 
-                        sample_set, runconfig, config)
+                        sample_set, sseaconfig, reportconfig)
     else:
         logging.debug("Creating detailed reports in serial")
         report_serial(filtered_results_file, row_metadata, col_metadata, 
-                      sample_set, runconfig, config)
+                      sample_set, sseaconfig, reportconfig)
     # produce report
-    if config.create_html:
+    if reportconfig.create_html:
         logging.debug("Writing HTML report")
-        html_file = os.path.join(config.output_dir, 'filtered_results.html')
+        html_file = os.path.join(reportconfig.output_dir, 'filtered_results.html')
         create_html_report(filtered_results_file, html_file,
-                           row_metadata, sample_set, runconfig)
+                           row_metadata, sample_set, sseaconfig)
     logging.debug("Done.")
     return 0
 
