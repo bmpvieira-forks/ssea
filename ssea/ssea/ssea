@@ -229,7 +229,7 @@ def ssea_cluster_init(config, ssea_script):
         # write map script
         lines = ['#!/bin/bash']
         lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (config.name))
+        lines.append('#PBS -N %s' % (sample_set.name))
         lines.append('#PBS -l %s' % (','.join(resource_fields)))
         lines.append('#PBS -t 0-%d' % (num_workers-1))
         lines.append('#PBS -V')
