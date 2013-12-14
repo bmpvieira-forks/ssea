@@ -314,14 +314,13 @@ def ssea_map(config, sample_set, worker_basenames, worker_chunks):
         p.join()
     return 0
 
-def compute_qvalues(json_iterator, hists_file, nrows):
+def compute_qvalues(json_iterator, hists_file):
     '''
     computes fdr q values from json Result objects sorted
     by abs(NES) (low to high)
     
     json_iterator: iterator that yields json objects in sorted order
     hists_file: contains histogram data from null distribution
-    nrows: number of rows (transcripts) in analysis
     '''
     # load histogram data
     hists = np.load(hists_file)
@@ -391,7 +390,7 @@ def compute_qvalues(json_iterator, hists_file, nrows):
     # cleanup
     hists.close()
 
-def ssea_reduce(input_basenames, nrows, output_json_file, output_hist_file):
+def ssea_reduce(input_basenames, output_json_file, output_hist_file):
     '''
     reduce step of SSEA run
     
@@ -420,7 +419,7 @@ def ssea_reduce(input_basenames, nrows, output_json_file, output_hist_file):
     try:
         with open(output_json_file, 'wb', 64*1024) as output:
             iterator = batch_merge(_cmp_json_nes, *json_iterables)
-            output.writelines(compute_qvalues(iterator, output_hist_file, nrows))
+            output.writelines(compute_qvalues(iterator, output_hist_file))
     finally:
         for iterable in json_iterables:
             try:

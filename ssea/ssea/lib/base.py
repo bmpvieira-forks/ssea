@@ -145,12 +145,22 @@ class SampleSet(object):
     def get_array(self, samples):
         return np.array([self.value_dict.get(x, MISSING_VALUE) 
                          for x in samples], dtype=SampleSet.DTYPE)
+    
+    @staticmethod
+    def from_json(s, samples):
+        d = json.loads(s)
+        return SampleSet(**d)
+       
+    @staticmethod
+    def parse_json(filename):
+        with open(filename, 'r') as f:
+            return SampleSet.from_json(f.next().strip())
 
-    def to_json(self, samples):
+    def to_json(self):
         d = {'name': self.name,
              'desc': self.desc,
-             'membership': self.get_array(samples)}
-        return json.dumps(d, cls=NumpyJSONEncoder)
+             'values': self.value_dict.items()}
+        return json.dumps(d)
 
     @staticmethod
     def parse_smx(filename, sep='\t'):
@@ -190,9 +200,9 @@ class SampleSet(object):
         '''
         sample_sets = []
         fileh = open(filename)
-        samples = fileh.next().strip().split(sep)[2:]
+        samples = fileh.next().rstrip('\n').split(sep)
         for line in fileh:
-            fields = line.strip().split(sep)
+            fields = line.rstrip('\n').split(sep)
             name = fields[0]
             desc = fields[1]
             values = []

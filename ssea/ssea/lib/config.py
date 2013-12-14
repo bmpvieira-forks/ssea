@@ -4,7 +4,6 @@ Created on Dec 2, 2013
 @author: mkiyer
 '''
 import os
-import copy
 import logging
 import argparse
 import json
@@ -25,6 +24,7 @@ class Config(object):
     RESULTS_JSON_FILE = 'results.json'
     OUTPUT_HISTS_FILE = 'hists.npz'
     LOG_DIR = 'log'
+    TMP_DIR = 'tmp'
     
     def __init__(self):
         self.num_processes = 1

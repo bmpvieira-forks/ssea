@@ -9,19 +9,8 @@ import random
 import os
 import numpy as np
 
-from ssea.base import Metadata, SampleSet, chunk, hist_quantile, interp
-
-def generate_random_sample_sets(N, minsize, maxsize, samples):
-    sample_sets = []
-    for i in xrange(N):
-        size = random.randint(minsize, maxsize)
-        randsamples = random.sample(samples, size)
-        sample_ids = [s._id for s in randsamples]
-        sample_sets.append(SampleSet(name="SS%d" % (i),
-                                     desc="Sample Set %d" % (i),
-                                     sample_ids=sample_ids))
-    return sample_sets
-
+from ssea.lib.base import chunk, interp, SampleSet
+   
 class TestBase(unittest.TestCase):
 
     def test_chunk(self):
@@ -45,89 +34,105 @@ class TestBase(unittest.TestCase):
         x = np.linspace(0,1,21)
         y = np.interp(x, bins, fp) 
         y2 = np.array([interp(v, bins, fp) for v in x])
-        self.assertTrue(np.array_equal(y, y2))
-        
-    def test_hist_quantile(self):
-        # TODO: write test cases
-        #hist = np.array([0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,1.0,1.0,1.0,2.0,4.0,10.0,10.0,13.0,22.0,21.0,32.0,40.0,36.0,36.0,51.0,68.0,61.0,54.0,61.0,55.0,55.0,36.0,24.0,8.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0])
-        #bins = np.array([-1.0,-0.98,-0.96,-0.94,-0.92,-0.9,-0.88,-0.86,-0.84,-0.82,-0.8,-0.78,-0.76,-0.74,-0.72,-0.7,-0.68,-0.66,-0.64,-0.62,-0.6,-0.58,-0.56,-0.54,-0.52,-0.5,-0.48,-0.46,-0.44,-0.42,-0.4,-0.38,-0.36,-0.34,-0.32,-0.3,-0.28,-0.26,-0.24,-0.22,-0.2,-0.18,-0.16,-0.14,-0.12,-0.1,-0.08,-0.06,-0.04,-0.02,0.0])
-        #print 'h', hist_quantile(hist,bins, 0.05)
-        #print 'h', hist_quantile(hist,bins, 0.95)
-        #print len(hist)
-        #print len(bins)
-        #es -0.27963404631
-        #es null mean -0.308334586515
-        return
+        self.assertTrue(np.allclose(y, y2, rtol=1e-6, atol=1e-6))
 
+
+def generate_random_sample_set(minsize, maxsize, samples):
+    size = random.randint(minsize, maxsize)
+    randsamples = random.sample(samples, size)
+    randvalues = np.random.random_integers(0,1,size=size)
+    values = []
+    for i in xrange(len(samples)):
+        if samples[i] in randsamples:
+            index = randsamples.index(samples[i])
+            values.append((samples[i],randvalues[index]))
+    return SampleSet(name="SS",
+                     desc="Sample Set",
+                     values=values)
+    
+class TestSampleSet(unittest.TestCase):
+    
     def test_sample_set_smx_parser(self):
+        # generate samples
+        samples = ['S%d' % (i) for i in range(10000)]
         # generate sample sets
-        N = 1000
+        N = 100
         minsize = 1
-        maxsize = 1000
-        population = map(str,range(100000))
-        samples = [Metadata(name=n) for n in population]
-        sample_id_name_map = dict((s._id,s.name) for s in samples)
-        sample_sets = generate_random_sample_sets(N, minsize, maxsize, samples)
+        maxsize = N
+        sample_sets = []
+        for i in xrange(N):
+            sample_sets.append(generate_random_sample_set(minsize,maxsize,samples))
         # write to a temp file
-        fileh = open('tmp', 'w')
-        print >>fileh, '\t'.join([ss.name for ss in sample_sets])
-        print >>fileh, '\t'.join([ss.desc for ss in sample_sets])
-        # force sample id sets to be lists for writing
-        for ss in sample_sets:
-            ss.sample_ids = list(ss.sample_ids)
-        for i in xrange(maxsize):
-            fields = []
-            for j in xrange(N):
-                if i >= len(sample_sets[j]):
-                    fields.append('')
-                else:
-                    ss = sample_sets[j]
-                    sample = sample_id_name_map[ss.sample_ids[i]]
-                    fields.append(sample)
-            print >>fileh, '\t'.join(fields)
-        # convert back to sets
-        for ss in sample_sets:
-            ss.sample_ids = set(ss.sample_ids)
+        names = ['Name'] + [ss.name for ss in sample_sets]
+        descs = ['Desc'] + [ss.desc for ss in sample_sets]
+        with open('tmp', 'w') as fileh:
+            print >>fileh, '\t'.join(names)
+            print >>fileh, '\t'.join(descs)
+            for i in xrange(len(samples)):
+                fields = [samples[i]]
+                for j in xrange(len(sample_sets)):
+                    if samples[i] in sample_sets[j].value_dict:
+                        fields.append(sample_sets[j].value_dict[samples[i]])
+                    else:
+                        fields.append('')
+                print >>fileh, '\t'.join(map(str,fields))
         fileh.close()
         # read into sample sets
-        read_sample_sets = SampleSet.parse_smx('tmp', samples)
+        read_sample_sets = SampleSet.parse_smx('tmp')
         self.assertTrue(len(read_sample_sets) == N)
         self.assertTrue(len(read_sample_sets) == len(sample_sets))
         for i in xrange(N):
-            self.assertEqual(read_sample_sets[i].name, sample_sets[i].name)
-            self.assertEqual(read_sample_sets[i].desc, sample_sets[i].desc)
-            self.assertEqual(read_sample_sets[i].sample_ids, sample_sets[i].sample_ids)
+            ss = sample_sets[i]
+            rss = read_sample_sets[i]
+            self.assertEqual(rss.name, ss.name)
+            self.assertEqual(rss.desc, ss.desc)
+            self.assertTrue(set(rss.value_dict.items()) == 
+                            set(ss.value_dict.items()))
+            a = ss.get_array(samples)
+            b = rss.get_array(samples)
+            self.assertTrue(np.array_equal(a, b))
         os.remove('tmp')
 
     def test_sample_set_smt_parser(self):
+        # generate samples
+        samples = ['S%d' % (i) for i in range(10000)]
         # generate sample sets
-        N = 1000
+        N = 100
         minsize = 1
-        maxsize = 1000
-        population = map(str,range(100000))
-        samples = [Metadata(name=n) for n in population]
-        sample_id_name_map = dict((s._id,s.name) for s in samples)
-        sample_sets = generate_random_sample_sets(N, minsize, maxsize, samples)
+        maxsize = N
+        sample_sets = []
+        for i in xrange(N):
+            sample_sets.append(generate_random_sample_set(minsize,maxsize,samples))
         # write to a temp file
         fileh = open('tmp', 'w')
+        fields = ['Name', 'Description']
+        fields.extend(samples)
+        print >>fileh, '\t'.join(fields)
         for i in xrange(len(sample_sets)):
             ss = sample_sets[i]
             fields = [ss.name, ss.desc]
-            fields.extend(sample_id_name_map[s_id] for s_id in ss.sample_ids)
-            print >>fileh, '\t'.join(fields)
+            for j in xrange(len(samples)):
+                if samples[j] in ss.value_dict:
+                    fields.append(ss.value_dict[samples[j]])
+                else:
+                    fields.append('')
+            print >>fileh, '\t'.join(map(str,fields))
         fileh.close()
         # read into sample sets
-        read_sample_sets = SampleSet.parse_smt('tmp', samples)
+        read_sample_sets = SampleSet.parse_smt('tmp')
         self.assertTrue(len(read_sample_sets) == N)
         self.assertTrue(len(read_sample_sets) == len(sample_sets))
         for i in xrange(N):
-            self.assertEqual(read_sample_sets[i].name, sample_sets[i].name)
-            self.assertEqual(read_sample_sets[i].desc, sample_sets[i].desc)
-            self.assertEqual(read_sample_sets[i].sample_ids, sample_sets[i].sample_ids)
+            ss = sample_sets[i]
+            rss = read_sample_sets[i]
+            self.assertEqual(rss.name, ss.name)
+            self.assertEqual(rss.desc, ss.desc)
+            self.assertTrue(set(rss.value_dict.items()) == 
+                            set(ss.value_dict.items()))
+            a = ss.get_array(samples)
+            b = rss.get_array(samples)
+            self.assertTrue(np.array_equal(a, b))            
         os.remove('tmp')
-
-
-
 
 if __name__ == "__main__":
     #import sys;sys.argv = ['', 'Test.testName']
