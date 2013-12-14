@@ -134,6 +134,7 @@ def main():
     row_metadata = list(Metadata.parse_tsv(row_metadata_file, bm.rownames))
     logging.info("Reading column metadata")
     col_metadata = list(Metadata.parse_tsv(col_metadata_file, bm.colnames))
+    
     # pipe row metadata into mongoimport 
     if args.row:
         logging.debug("Importing row metadata")

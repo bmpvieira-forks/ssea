@@ -1,151 +1,160 @@
 '''
-Created on Dec 11, 2013
+Created on Nov 12, 2013
 
 @author: mkiyer
+@author: yniknafs
 '''
-import argparse
-import logging
 import os
 import sys
-import itertools
+import argparse
+import logging
+import pymongo
 import subprocess
+import ssea
+import collections
+import numpy as np
+from ssea.lib.countdata import BigCountMatrix
+from ssea.lib.base import Result, SampleSet
 import json
 
-from ssea.lib.countdata import BigCountMatrix
-                
-class Metadata(object):
-    __slots__ = ('_id', 'name', 'params')
-    
-    def __init__(self, _id=None, name=None, params=None):
-        '''
-        _id: unique integer id
-        name: string name
-        params: dictionary of parameter-value data
-        '''
-        self._id = _id
-        self.name = name
-        self.params = {}
-        if params is not None:
-            self.params.update(params)
+NUM_NES_BINS = 10001
+NES_BINS = np.logspace(-1,2,num=NUM_NES_BINS,base=10)
+LOG_NES_BINS = np.log10(NES_BINS)
 
-    def __repr__(self):
-        return ("<%s(_id=%d,name=%s,params=%s>" % 
-                (self.__class__.__name__, self._id, self.name, 
-                 self.params))
-    def __eq__(self, other):
-        return self._id == other._id
-    def __ne__(self, other):
-        return self._id != other._id
-    def __hash__(self):
-        return hash(self._id)
 
-    def to_json(self):
-        d = dict(self.params)
-        d.update({'_id': self._id,
-                  'name': self.name})
-        return json.dumps(d)
-    
-    @staticmethod
-    def from_json(s):
-        d = json.loads(s)
-        m = Metadata()
-        m._id = d.pop('_id')
-        m.name = d.pop('name')
-        m.params = d
-        return m
-    
-    @staticmethod
-    def from_dict(d):
-        m = Metadata()
-        m._id = d.pop('_id')
-        m.name = d.pop('name')
-        m.params = d
-        return m
-    
-    @staticmethod
-    def parse_json(filename):
-        with open(filename, 'r') as fp:
-            for line in fp:
-                yield Metadata.from_json(line.strip())
+_package_dir = ssea.__path__[0]
 
-    @staticmethod
-    def parse_tsv(filename, names, id_iter=None):
-        '''
-        parse tab-delimited file containing sample information        
-        first row contains column headers
-        first column must contain sample name
-        remaining columns contain metadata
-        '''
-        if id_iter is None:
-            id_iter = itertools.count()
-        # read entire metadata file
-        metadict = {}
-        with open(filename) as fileh:
-            header_fields = fileh.next().strip().split('\t')[1:]
-            for line in fileh:
-                fields = line.strip().split('\t')
-                name = fields[0]            
-                metadict[name] = fields[1:]
-        # join with names
-        for name in names:
-            if name not in metadict:
-                logging.error("Name %s not found in metadata" % (name))
-            assert name in metadict
-            fields = metadict[name]
-            metadata = dict(zip(header_fields,fields))
-            yield Metadata(id_iter.next(), name, metadata)  
-            
-def main():
-    parser = argparse.ArgumentParser()            
-#     parser.add_argument('--colmeta', dest='col_metadata_file',
-#                         help='file containing metadata corresponding to each '
-#                         'column of the weight matrix file')
-#     parser.add_argument('--rowmeta', dest='row_metadata_file',
-#                         help='file containing metadata corresponding to each '
-#                         'row of the weight matrix file')
-    parser.add_argument("-r", dest="row", 
-                        action="store_true", default=False, 
-                        help="Print row_meta JSONs")
-    parser.add_argument("-c", dest="col", 
-                        action="store_true", default=False, 
-                        help="Print col_meta JSONs")
-    parser.add_argument('matrix_dir')
-    args = parser.parse_args()
-    # check command line args
-    matrix_dir = os.path.abspath(args.matrix_dir)
-    col_metadata_file = os.path.join(matrix_dir, 'colmeta.tsv')
-    row_metadata_file = os.path.join(matrix_dir, 'rowmeta.tsv')
-    
-    if not os.path.exists(col_metadata_file):
-        parser.error("Column metadata file '%s' not found" % (args.col_metadata_file))
-    if not os.path.exists(row_metadata_file):
-        parser.error("Row metadata file '%s' not found" % (args.row_metadata_file))
-    if not os.path.exists(args.matrix_dir):
-        parser.error('matrix path "%s" not found' % (args.matrix_dir))
+#list of fields to add to the trans_meta dictionary
+fields_trans = ['category', 
+          'nearest_gene_names', 
+          'num_exons', 
+          'name',
+          'gene_id']
 
-#     col_metadata_file = os.path.abspath(args.col_metadata_file)
-#     row_metadata_file = os.path.abspath(args.row_metadata_file)
-    # open matrix
+#list of fields from the reports to use in the combined database
+fields_reports = ['t_id',
+          'ss_id',
+          'ss_fdr_q_value',
+          'fdr_q_value',
+          'es',
+          'nes',
+          'nominal_p_value',
+          'ss_rank']
+
+
+
+#connects to the mongo db and returns a dictionary  
+#containing each collection in the database
+def db_connect(name, host):
+    logging.info('connecting to %s database on mongo server: %s' % (name, host))
+    client = pymongo.MongoClient(host)
+    db = client[name]
+    row_metadata = db['metadata']
+    col_metadata = db['samples']
+    sample_sets = db['sample_sets']
+    config = db['config']
+    reports = db['reports']
+    colls = {'row_meta':row_metadata, 'col_meta':col_metadata, 'ss':sample_sets, 'config':config, 'reports':reports}
+    return colls
+
+
+    config_json_file = os.path.join(input_dir, 
+                                    'config.json')
+    results_json_file = os.path.join(input_dir, 
+                                    'results.json')
+    hists_file = os.path.join(input_dir, 
+                                    'hists.npz')
+
+def db_ss_printJSON(ssea_dir, matrix_dir, ss_id):
+    sample_sets_json_file = os.path.join(ssea_dir,
+                                         'sample_set.json')
     bm = BigCountMatrix.open(matrix_dir)
-    if bm.size_factors is None:
-        parser.error("Size factors not found in count matrix")
-    # read metadata
-    logging.info("Reading row metadata")
-    row_metadata = list(Metadata.parse_tsv(row_metadata_file, bm.rownames))
-    logging.info("Reading column metadata")
-    col_metadata = list(Metadata.parse_tsv(col_metadata_file, bm.colnames))
-    # pipe row metadata into mongoimport 
-    if args.row:
-        logging.debug("Importing row metadata")
-        for m in row_metadata:
-            print >>sys.stdout, m.to_json()
-    if args.col:
-        logging.debug("Importing column metadata")
-        for m in col_metadata:
-            print >>sys.stdout, m.to_json()
-    # cleanup
-    bm.close()
+    samples = bm.colnames
+    ss = SampleSet.parse_json(sample_sets_json_file)
+    membership = ss.get_array(samples)
+    d = ss.to_dict(membership)
+    d['_id'] = ss_id
+    print json.dumps(d)
+    
+def db_config_printJSON(ssea_dir, ss_id):
+    config_json_file = os.path.join(ssea_dir,
+                                         'config.json')
+    s = open(config_json_file).read()
+    d = json.loads(s)
+    d['_id'] = ss_id
+    print json.dumps(d)
 
+def db_results_printJSON(ssea_dir, ss_id):
+    results_json_file = os.path.join(ssea_dir,
+                                         'results.json')
+    with open(results_json_file, 'r') as fin:
+        for line in fin:
+            # load json document (one per line)
+            result = Result.from_json(line.strip())  
+            result.ss_id = ss_id
+            print result.to_json()
+
+def db_hists_printJSON(ssea_dir, ss_id):
+    hists_file = os.path.join(ssea_dir, 
+                                    'hists.npz')
+
+    x = np.load(hists_file)
+    hist_fields = ['obs_nes_neg', 
+                   'obs_nes_pos', 
+                   'null_nes_neg',
+                   'null_nes_pos']
+    d = {}
+    for field in hist_fields: 
+        d[field] =  list(x[field])
+    
+    d['nes_bins'] = list(NES_BINS)
+    d['_id'] = ss_id
+    print json.dumps(d)
+    
+
+def main(argv=None):
+    '''Command line options.'''    
+    # Setup command line args
+    parser = argparse.ArgumentParser()
+    # Add command line parameters
+    parser.add_argument("ssea_dir", 
+                        help="directory containing ssea files to import into db")
+    parser.add_argument("matrix_dir", 
+                        help="directory containing matrix files")
+    parser.add_argument("ss_id", 
+                        help="Sample set ID")
+    parser.add_argument("-s", dest="s", 
+                        action="store_true", default=False, 
+                        help="Print sample_set JSON")
+    parser.add_argument("-c", dest="c", 
+                        action="store_true", default=False, 
+                        help="Print config JSON")
+    parser.add_argument("-r", dest="r", 
+                        action="store_true", default=False, 
+                        help="Print results JSONs")
+    parser.add_argument("--hist", dest="h", 
+                        action="store_true", default=False, 
+                        help="Print hists JSON")
+    
+    
+    args = parser.parse_args()
+    level = logging.DEBUG
+    logging.basicConfig(level=level,
+                        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    
+    if args.s:
+        db_ss_printJSON(args.ssea_dir, args.matrix_dir, args.ss_id)
+    if args.c:
+        db_config_printJSON(args.ssea_dir, args.ss_id)
+    if args.r:
+        db_results_printJSON(args.ssea_dir, args.ss_id)
+    if args.h:
+        db_hists_printJSON(args.ssea_dir, args.ss_id)
+    
+    
+    
+    
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())

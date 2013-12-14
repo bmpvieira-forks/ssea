@@ -163,6 +163,12 @@ class SampleSet(object):
              'values': self.value_dict.items()}
         return json.dumps(d)
 
+    def to_dict(self, membership):
+        d = {'name': self.name,
+             'desc': self.desc,
+             'membership': str(membership)}
+        return d
+
     @staticmethod
     def parse_smx(filename, sep='\t'):
         '''
