@@ -203,7 +203,6 @@ def ssea_run(counts, size_factors, membership, rng, config):
     # return result and null distribution for subsequent fdr calculations
     return res, null_nes_vals
 
-
 def ssea_serial(config, sample_set, output_basename, 
                 startrow=None, endrow=None):
     '''
