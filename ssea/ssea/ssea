@@ -89,7 +89,7 @@ def ssea_mapreduce(config):
     if bm.size_factors is None:
         logging.debug("No size factors found in count matrix.. estimating")
         bm.estimate_size_factors('deseq')
-    nrows = bm.shape[0]
+    shape = bm.shape
     bm.close()
     # read/process sample sets
     sample_sets = read_sample_sets(config)
@@ -118,7 +118,7 @@ def ssea_mapreduce(config):
         # map work into chunks
         worker_basenames = []
         worker_chunks = []
-        for startrow,endrow in chunk(nrows, config.num_processes):
+        for startrow,endrow in chunk(shape[0], config.num_processes):
             i = len(worker_basenames)
             logging.debug("Worker process %d range %d-%d (%d total rows)" % 
                           (i, startrow, endrow, (endrow-startrow)))
@@ -280,8 +280,6 @@ def ssea_cluster_init(config, ssea_script):
             f.write('\n'.join(lines))
         # submit reduce job
         qsub(lines)
-    # cleanup
-    bm.close()
     return 0
 
 def ssea_cluster_map(output_dir):
