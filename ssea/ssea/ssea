@@ -242,7 +242,7 @@ def ssea_cluster_init(config, ssea_script):
         lines.append(' '.join(args))
         lines.append('')
         # write script to file
-        script_file = os.path.join(config.output_dir, CLUSTER_MAP_SCRIPT)
+        script_file = os.path.join(sample_set_dir, CLUSTER_MAP_SCRIPT)
         with open(script_file, 'w') as f:
             f.write('\n'.join(lines))
         # submit map job
@@ -275,7 +275,7 @@ def ssea_cluster_init(config, ssea_script):
         lines.append(' '.join(args))
         lines.append('')
         # write script to file
-        script_file = os.path.join(config.output_dir, CLUSTER_REDUCE_SCRIPT)
+        script_file = os.path.join(sample_set_dir, CLUSTER_REDUCE_SCRIPT)
         with open(script_file, 'w') as f:
             f.write('\n'.join(lines))
         # submit reduce job
