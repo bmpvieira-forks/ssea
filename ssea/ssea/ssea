@@ -202,6 +202,8 @@ def ssea_cluster_init(config, ssea_script):
                 print >>f, '\t'.join(map(str,fields))
                 max_chunk_size = max(max_chunk_size, (endrow - startrow))
                 num_workers += 1
+        logging.debug("Worker processes: %d" % (num_workers))
+        logging.debug("Max transcripts per worker: %d" % (max_chunk_size))
         # calculate job walltime
         num_tests = (max_chunk_size * shape[1] * 
                      (1 + config.perms + config.resampling_iterations))
