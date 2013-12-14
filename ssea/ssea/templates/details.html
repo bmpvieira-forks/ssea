@@ -26,7 +26,8 @@
 <tr><td>Enrichment Score (ES)</td><td>{{ result.es }}</td></tr>
 <tr><td>Normalized Enrichment Score (NES)</td><td>{{ result.nes }}</td></tr>
 <tr><td>Nominal p-value</td><td>{{ result.nominal_p_value }}</td></tr>
-<tr><td>FDR q-value</td><td>{{ result.fdr_q_value }}</td></tr>
+<tr><td>Sample Set Rank</td><td>{{ result.ss_rank }}</td></tr>
+<tr><td>Sample Set Percentile</td><td>{{ 100.0 * result.ss_frac }}</td></tr>
 <tr><td>Sample Set FDR q-value</td><td>{{ result.ss_fdr_q_value }}</td></tr>
 <tr><td>Rank at maximum running ES</td><td>{{ result.es_rank }}</td></tr>
 <tr><td>Leading edge hits</td><td>{{ result.core_hits }}</td></tr>
@@ -73,22 +74,6 @@ Detailed results
 {% endfor %}
 </tbody>
 </table>
-
-<br/><br/><br/>
-
-{% if 'nplot_png' in files %}
-<img name="null_dist_{{ rowmeta.name }}_vs_{{ sample_set.name }}" src="{{ files.nplot_png }}"/>
-<br/>
-Fig 2: Random ES distribution for {{ sample_set.name }}
-<br/>
-Gene set null distribution of ES for {{ sample_set.name }}
-{% else %}
-No null distribution plot available
-{% endif %}
-<br/>
-{% if 'nplot_pdf' in files %}
-<a href="{{ files.nplot_pdf }}">Download PDF</a>
-{% endif %}
 
 </body>
 </html>

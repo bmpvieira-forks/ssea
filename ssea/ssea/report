@@ -23,8 +23,6 @@ import numpy as np
 from jinja2 import Environment, PackageLoader
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-import matplotlib.cm as cm
-from matplotlib import figure
 
 # local imports
 from ssea.lib.kernel import ssea_kernel, RandomState
@@ -62,11 +60,14 @@ class ReportConfig(object):
     def get_argument_parser(self, parser=None):
         if parser is None:
             parser = argparse.ArgumentParser()
+        parser.add_argument("-v", "--verbose", dest="verbose", 
+                            action="store_true", default=False, 
+                            help="set verbosity level [default: %(default)s]")
+        parser.add_argument('-p', '--num-processes', dest='num_processes',
+                            type=int, default=1,
+                            help='Number of processor cores available '
+                            '[default=%(default)s]')
         grp = parser.add_argument_group("SSEA Report Options")
-        grp.add_argument('-p', '--num-processes', dest='num_processes',
-                         type=int, default=1,
-                         help='Number of processor cores available '
-                         '[default=%(default)s]')
         grp.add_argument('--no-html', dest="create_html", 
                          action="store_false", default=self.create_html,
                          help='Do not create detailed html reports')
@@ -99,10 +100,17 @@ class ReportConfig(object):
     @staticmethod
     def parse_args(parser=None):
         # create Config instance
-        self = Config()
+        self = ReportConfig()
         # parse command line arguments
         parser = self.get_argument_parser(parser)
         args = parser.parse_args()
+        # setup logging
+        if args.verbose > 0:
+            level = logging.DEBUG
+        else:
+            level = logging.INFO
+        logging.basicConfig(level=level,
+                            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         # process and check arguments
         self.create_html = args.create_html
         self.create_pdf = args.create_pdf
@@ -130,12 +138,18 @@ class ReportConfig(object):
         if os.path.exists(self.output_dir):
             parser.error("Report directory '%s' already exists" % 
                          (self.output_dir))
-        if not os.path.exists(args.col_metadata_file):
-            parser.error("Column metadata file '%s' not found" % (args.col_metadata_file))
-        if not os.path.exists(args.row_metadata_file):
-            parser.error("Row metadata file '%s' not found" % (args.row_metadata_file))
-        self.col_metadata_file = os.path.abspath(args.col_metadata_file)
-        self.row_metadata_file = os.path.abspath(args.row_metadata_file)
+        if args.col_metadata_file is not None:
+            if not os.path.exists(args.col_metadata_file):
+                parser.error("Column metadata file '%s' not found" % (args.col_metadata_file))
+            self.col_metadata_file = os.path.abspath(args.col_metadata_file)
+        else:
+            self.col_metadata_file = None
+        if args.row_metadata_file is not None:
+            if not os.path.exists(args.row_metadata_file):
+                parser.error("Row metadata file '%s' not found" % (args.row_metadata_file))
+            self.row_metadata_file = os.path.abspath(args.row_metadata_file)
+        else:
+            self.row_metadata_file = None
         return self
 
 class SSEAData:
@@ -264,16 +278,16 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
     fig = plot_enrichment(result, sseadata, 
                           title=title, 
                           fig=global_fig)
-    eplot_png = '%s.%s.eplot.png' % (rowmeta.name, sample_set.name)
+    eplot_png = '%s.eplot.png' % (rowmeta.name)
     fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
     d['eplot_png'] = eplot_png
     if reportconfig.create_pdf:    
-        eplot_pdf = '%s.%s.eplot.pdf' % (rowmeta.name, sample_set.name)
+        eplot_pdf = '%s.eplot.pdf' % (rowmeta.name)
         fig.savefig(os.path.join(reportconfig.output_dir, eplot_pdf))
         d['eplot_pdf'] = eplot_pdf
     # write tab-delimited details file
     details_rows = sseadata.get_details_table(colmeta)
-    details_tsv = '%s.%s.tsv' % (rowmeta.name, sample_set.name)
+    details_tsv = '%s.tsv' % (rowmeta.name)
     fp = open(os.path.join(reportconfig.output_dir, details_tsv), 'w')
     for row in details_rows:
         print >>fp, '\t'.join(map(str,row))
@@ -281,7 +295,7 @@ def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set,
     d['tsv'] = details_tsv
     # render to html
     if reportconfig.create_html:
-        details_html = '%s.%s.html' % (rowmeta.name, sample_set.name)
+        details_html = '%s.html' % (rowmeta.name)
         t = env.get_template('details.html')
         fp = open(os.path.join(reportconfig.output_dir, details_html), 'w')
         print >>fp, t.render(result=result,
@@ -406,8 +420,7 @@ def report_parallel(output_file, row_metadata, col_metadata,
     for p in procs:
         p.join()
 
-def create_html_report(input_file, output_file, row_metadata, sample_set, 
-                       runconfig):
+def create_html_report(input_file, output_file, row_metadata, sample_set):
     def _result_parser(filename):
         with open(filename, 'r') as fp:
             for line in fp:
@@ -415,7 +428,7 @@ def create_html_report(input_file, output_file, row_metadata, sample_set,
                 rowmeta = row_metadata[result.t_id]
                 result.sample_set_name = sample_set.name
                 result.sample_set_desc = sample_set.desc
-                result.sample_set_size = len(sample_set.value_dict)
+                result.sample_set_size = len(sample_set)
                 result.name = rowmeta.name
                 result.params = rowmeta.params
                 yield result
@@ -427,7 +440,7 @@ def create_html_report(input_file, output_file, row_metadata, sample_set,
     # render templates
     t = env.get_template('report.html')
     with open(output_file, 'w') as fp:
-        print >>fp, t.render(name=runconfig.name,
+        print >>fp, t.render(name=sample_set.name,
                              params=allparams,
                              results=_result_parser(input_file))
 
@@ -481,32 +494,14 @@ def report(reportconfig):
         logging.debug("Writing HTML report")
         html_file = os.path.join(reportconfig.output_dir, 'filtered_results.html')
         create_html_report(filtered_results_file, html_file,
-                           row_metadata, sample_set, sseaconfig)
+                           row_metadata, sample_set)
     logging.debug("Done.")
     return 0
 
 def main(argv=None):
-    # Setup argument parser
-    parser = argparse.ArgumentParser()
-    # Add command line parameters
-    config = ReportConfig()
-    config.get_argument_parser(parser)
-    parser.add_argument("-v", "--verbose", dest="verbose", 
-                        action="store_true", default=False, 
-                        help="set verbosity level [default: %(default)s]")
-    # Process arguments
-    args = parser.parse_args()
-    # setup logging
-    if args.verbose > 0:
-        level = logging.DEBUG
-    else:
-        level = logging.INFO
-    logging.basicConfig(level=level,
-                        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-    # initialize configuration
-    config.parse_args(parser, args)
+    # Parse command line
+    config = ReportConfig.parse_args()
     config.log()
-    #return report_parallel(config)
     return report(config)
 
 if __name__ == "__main__":
