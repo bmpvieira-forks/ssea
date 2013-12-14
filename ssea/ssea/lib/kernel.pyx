@@ -34,8 +34,8 @@ cdef class RandomState:
         else:
             self.seed = seed
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def shufflef(np.ndarray[FLOAT_t, ndim=1] x, RandomState r):
     cdef int i, j
     i = len(x) - 1
@@ -44,8 +44,8 @@ def shufflef(np.ndarray[FLOAT_t, ndim=1] x, RandomState r):
         x[i], x[j] = x[j], x[i]
         i = i - 1
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def shufflei(np.ndarray[INT_t, ndim=1] x, RandomState r):
     cdef int i, j
     i = len(x) - 1
@@ -54,16 +54,16 @@ def shufflei(np.ndarray[INT_t, ndim=1] x, RandomState r):
         x[i], x[j] = x[j], x[i]
         i = i - 1
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def resample_poisson(np.ndarray[FLOAT_t, ndim=1] x not None,
                      RandomState r):
     cdef int i    
     for i in xrange(x.shape[0]):
         x[i] = rng.lcg_poisson(&r.seed, x[i])
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def add_gaussian_noise(np.ndarray[FLOAT_t, ndim=1] x not None, 
                        RandomState r,
                        double loc=0.0,
@@ -76,8 +76,8 @@ def add_gaussian_noise(np.ndarray[FLOAT_t, ndim=1] x not None,
         if x[i] < 0:
             x[i] = 0
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def normalize_counts(np.ndarray[FLOAT_t, ndim=1] counts not None,
                      np.ndarray[FLOAT_t, ndim=1] size_factors not None,
                      RandomState r,
@@ -101,8 +101,8 @@ def normalize_counts(np.ndarray[FLOAT_t, ndim=1] counts not None,
             #if counts[i] < 0:
             #    counts[i] = 0
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def power_transform(np.ndarray[FLOAT_t, ndim=1] x not None,
                     int method, double param=1.0):
     cdef np.ndarray[FLOAT_t, ndim=1] newx
@@ -129,8 +129,8 @@ def power_transform(np.ndarray[FLOAT_t, ndim=1] x not None,
         assert False
     return newx
 
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def random_walk(np.ndarray[FLOAT_t, ndim=1] weights_miss not None,
                 np.ndarray[FLOAT_t, ndim=1] weights_hit not None,
                 np.ndarray[INT_t, ndim=1] membership not None,
@@ -201,8 +201,8 @@ def random_walk(np.ndarray[FLOAT_t, ndim=1] weights_miss not None,
                     es_rank = i
     return es_val, es_rank, es_run
       
-@cython.boundscheck(True)
-@cython.wraparound(True)
+@cython.boundscheck(False)
+@cython.wraparound(False)
 def ssea_kernel(np.ndarray[FLOAT_t, ndim=1] counts not None,
                 np.ndarray[FLOAT_t, ndim=1] size_factors not None,
                 np.ndarray[INT_t, ndim=1] membership not None,
