@@ -147,7 +147,7 @@ class SampleSet(object):
                          for x in samples], dtype=SampleSet.DTYPE)
     
     @staticmethod
-    def from_json(s, samples):
+    def from_json(s):
         d = json.loads(s)
         return SampleSet(**d)
        
