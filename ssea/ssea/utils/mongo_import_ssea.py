@@ -19,26 +19,6 @@ import json
 #connects to the mongo db and returns a dictionary  
 #containing each collection in the database
 
-_package_dir = ssea.__path__[0]
-
-#list of fields to add to the trans_meta dictionary
-fields_trans = ['category', 
-          'nearest_gene_names', 
-          'num_exons', 
-          'name',
-          'gene_id']
-
-#list of fields from the reports to use in the combined database
-fields_reports = ['t_id',
-          'ss_id',
-          'ss_fdr_q_value',
-          'fdr_q_value',
-          'es',
-          'nes',
-          'nominal_p_value',
-          'ss_rank']
-
-
 def db_ssea_import(ssea_dir, matrix_dir, name, host):
     sample_sets_json_file = os.path.join(ssea_dir,
                                          'sample_set.json')

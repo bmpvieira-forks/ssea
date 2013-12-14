@@ -14,40 +14,12 @@ import ssea
 import collections
 import numpy as np
 
+# local imports
+from ssea.utils.mongo import db_connect
 
 #connects to the mongo db and returns a dictionary  
 #containing each collection in the database
-
 _package_dir = ssea.__path__[0]
-
-#list of fields to add to the trans_meta dictionary
-fields_trans = ['category', 
-          'nearest_gene_names', 
-          'num_exons', 
-          'name',
-          'gene_id']
-
-#list of fields from the reports to use in the combined database
-fields_reports = ['t_id',
-          'ss_id',
-          'ss_fdr_q_value',
-          'fdr_q_value',
-          'es',
-          'nes',
-          'nominal_p_value',
-          'ss_rank']
-
-
-
-def db_connect(name, host):
-    logging.info('connecting to %s database on mongo server: %s' % (name, host))
-    client = pymongo.MongoClient(host)
-    db = client[name]
-    samples = db['samples']
-    transcripts = db['transcripts']
-    colls = {'samples':samples, 'transcripts':transcripts}
-    return colls
-
 
 def db_metadata_import(input_dir, name, host):
     logging.info('importing ssea data to %s database on mongo server: %s' % (name, host))
