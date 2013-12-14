@@ -5,6 +5,7 @@ Created on Oct 18, 2013
 '''
 import logging
 import json
+import itertools
 import numpy as np
 
 INT_DTYPE = np.int
@@ -145,12 +146,22 @@ class SampleSet(object):
     def get_array(self, samples):
         return np.array([self.value_dict.get(x, MISSING_VALUE) 
                          for x in samples], dtype=SampleSet.DTYPE)
+    
+    @staticmethod
+    def from_json(s):
+        d = json.loads(s)
+        return SampleSet(**d)
+       
+    @staticmethod
+    def parse_json(filename):
+        with open(filename, 'r') as f:
+            return SampleSet.from_json(f.next().strip())
 
-    def to_json(self, samples):
+    def to_json(self):
         d = {'name': self.name,
              'desc': self.desc,
-             'membership': self.get_array(samples)}
-        return json.dumps(d, cls=NumpyJSONEncoder)
+             'values': self.value_dict.items()}
+        return json.dumps(d)
 
     @staticmethod
     def parse_smx(filename, sep='\t'):
@@ -190,9 +201,9 @@ class SampleSet(object):
         '''
         sample_sets = []
         fileh = open(filename)
-        samples = fileh.next().strip().split(sep)[2:]
+        samples = fileh.next().rstrip('\n').split(sep)
         for line in fileh:
-            fields = line.strip().split(sep)
+            fields = line.rstrip('\n').split(sep)
             name = fields[0]
             desc = fields[1]
             values = []
@@ -205,6 +216,88 @@ class SampleSet(object):
             sample_sets.append(SampleSet(name, desc, values))
         fileh.close()
         return sample_sets
+
+class Metadata(object):
+    __slots__ = ('_id', 'name', 'params')
+    
+    def __init__(self, _id=None, name=None, params=None):
+        '''
+        _id: unique integer id
+        name: string name
+        params: dictionary of parameter-value data
+        '''
+        self._id = _id
+        self.name = name
+        self.params = {}
+        if params is not None:
+            self.params.update(params)
+
+    def __repr__(self):
+        return ("<%s(_id=%d,name=%s,params=%s>" % 
+                (self.__class__.__name__, self._id, self.name, 
+                 self.params))
+    def __eq__(self, other):
+        return self._id == other._id
+    def __ne__(self, other):
+        return self._id != other._id
+    def __hash__(self):
+        return hash(self._id)
+
+    def to_json(self):
+        d = dict(self.params)
+        d.update({'_id': self._id,
+                  'name': self.name})
+        return json.dumps(d)
+    
+    @staticmethod
+    def from_json(s):
+        d = json.loads(s)
+        m = Metadata()
+        m._id = d.pop('_id')
+        m.name = d.pop('name')
+        m.params = d
+        return m
+    
+    @staticmethod
+    def from_dict(d):
+        m = Metadata()
+        m._id = d.pop('_id')
+        m.name = d.pop('name')
+        m.params = d
+        return m
+    
+    @staticmethod
+    def parse_json(filename):
+        with open(filename, 'r') as fp:
+            for line in fp:
+                yield Metadata.from_json(line.strip())
+
+    @staticmethod
+    def parse_tsv(filename, names, id_iter=None):
+        '''
+        parse tab-delimited file containing sample information        
+        first row contains column headers
+        first column must contain sample name
+        remaining columns contain metadata
+        '''
+        if id_iter is None:
+            id_iter = itertools.count()
+        # read entire metadata file
+        metadict = {}
+        with open(filename) as fileh:
+            header_fields = fileh.next().strip().split('\t')[1:]
+            for line in fileh:
+                fields = line.strip().split('\t')
+                name = fields[0]            
+                metadict[name] = fields[1:]
+        # join with names
+        for name in names:
+            if name not in metadict:
+                logging.error("Name %s not found in metadata" % (name))
+            assert name in metadict
+            fields = metadict[name]
+            metadata = dict(zip(header_fields,fields))
+            yield Metadata(id_iter.next(), name, metadata)  
 
 class Result(object):
     MAX_POINTS = 100
@@ -248,9 +341,9 @@ class Result(object):
         res.ss_fdr_q_value = 1.0
         res.ss_rank = None
         res.ss_frac = 0.0
-        res.resample_es_vals = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
-        res.resample_es_ranks = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
-        res.null_es_vals = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
-        res.null_es_ranks = np.zeros(Result.MAX_ES_POINTS, dtype=np.float)
+        res.resample_es_vals = np.zeros(Result.MAX_POINTS, dtype=np.float)
+        res.resample_es_ranks = np.zeros(Result.MAX_POINTS, dtype=np.float)
+        res.null_es_vals = np.zeros(Result.MAX_POINTS, dtype=np.float)
+        res.null_es_ranks = np.zeros(Result.MAX_POINTS, dtype=np.float)
         res.null_es_mean = 0.0
         return res

@@ -149,8 +149,8 @@ def ssea_run(counts, size_factors, membership, rng, config):
     # estimate nominal p value for S from ES(S,null) by using the
     # positive or negative portion of the distribution corresponding
     # to the sign of the observed ES(S)
-    p_value = (np.fabs(null_es_vals) >= es_val).sum().astype(np.float)
-    p_value /= null_es_vals.shape[0] 
+    p_value = (np.fabs(null_es_vals) >= np.fabs(es_val)).sum().astype(np.float)
+    p_value /= null_es_vals.shape[0]
     # Create result object for this SSEA test
     res = Result()
     res.rand_seed = rand_seed
@@ -202,7 +202,6 @@ def ssea_run(counts, size_factors, membership, rng, config):
     res.odds_ratio = odds_ratio
     # return result and null distribution for subsequent fdr calculations
     return res, null_nes_vals
-
 
 def ssea_serial(config, sample_set, output_basename, 
                 startrow=None, endrow=None):
@@ -314,14 +313,13 @@ def ssea_map(config, sample_set, worker_basenames, worker_chunks):
         p.join()
     return 0
 
-def compute_qvalues(json_iterator, hists_file, nrows):
+def compute_qvalues(json_iterator, hists_file):
     '''
     computes fdr q values from json Result objects sorted
     by abs(NES) (low to high)
     
     json_iterator: iterator that yields json objects in sorted order
     hists_file: contains histogram data from null distribution
-    nrows: number of rows (transcripts) in analysis
     '''
     # load histogram data
     hists = np.load(hists_file)
@@ -391,7 +389,7 @@ def compute_qvalues(json_iterator, hists_file, nrows):
     # cleanup
     hists.close()
 
-def ssea_reduce(input_basenames, nrows, output_json_file, output_hist_file):
+def ssea_reduce(input_basenames, output_json_file, output_hist_file):
     '''
     reduce step of SSEA run
     
@@ -420,7 +418,7 @@ def ssea_reduce(input_basenames, nrows, output_json_file, output_hist_file):
     try:
         with open(output_json_file, 'wb', 64*1024) as output:
             iterator = batch_merge(_cmp_json_nes, *json_iterables)
-            output.writelines(compute_qvalues(iterator, output_hist_file, nrows))
+            output.writelines(compute_qvalues(iterator, output_hist_file))
     finally:
         for iterable in json_iterables:
             try:

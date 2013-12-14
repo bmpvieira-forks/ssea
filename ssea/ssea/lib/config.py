@@ -4,7 +4,6 @@ Created on Dec 2, 2013
 @author: mkiyer
 '''
 import os
-import copy
 import logging
 import argparse
 import json
@@ -25,6 +24,7 @@ class Config(object):
     RESULTS_JSON_FILE = 'results.json'
     OUTPUT_HISTS_FILE = 'hists.npz'
     LOG_DIR = 'log'
+    TMP_DIR = 'tmp'
     
     def __init__(self):
         self.num_processes = 1
@@ -172,6 +172,8 @@ class Config(object):
         self.pbs_script = args.pbs_script
         # output directory
         self.output_dir = os.path.abspath(args.output_dir)
+        if os.path.exists(self.output_dir):
+            parser.error("Output directory '%s' already exists" % (args.output_dir))
         # process and check arguments
         self.num_processes = args.num_processes
         self.perms = max(1, args.perms)
