@@ -262,7 +262,7 @@ def ssea_cluster_init(config, ssea_script):
         resource_fields.append('pmem=3750mb')
         lines = ['#!/bin/bash']
         lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (config.name))
+        lines.append('#PBS -N %s' % (sample_set.name))
         lines.append('#PBS -l %s' % (','.join(resource_fields)))
         lines.append('#PBS -V')
         lines.append("#PBS -o %s" % (os.path.join(log_dir, 'reduce.stdout')))
