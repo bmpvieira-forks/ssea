@@ -144,7 +144,7 @@ class SampleSet(object):
         return sum(self.value_dict.itervalues())
     
     def get_array(self, samples):
-        return np.array([self.value_dict.get(x, MISSING_VALUE) 
+        return np.array([self.value_dict.get(x, SampleSet.MISSING_VALUE) 
                          for x in samples], dtype=SampleSet.DTYPE)
     
     @staticmethod
