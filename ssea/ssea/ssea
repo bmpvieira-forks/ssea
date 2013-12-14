@@ -90,6 +90,7 @@ def ssea_mapreduce(config):
         logging.debug("No size factors found in count matrix.. estimating")
         bm.estimate_size_factors('deseq')
     nrows = bm.shape[0]
+    bm.close()
     # read/process sample sets
     sample_sets = read_sample_sets(config)
     for i,sample_set in enumerate(sample_sets):
@@ -113,7 +114,7 @@ def ssea_mapreduce(config):
         logging.debug("Writing sample set file")
         sample_set_file = os.path.join(sample_set_dir, Config.SAMPLE_SET_JSON_FILE) 
         with open(sample_set_file, 'w') as fp:
-            print >>fp, sample_set.to_json(bm.colnames) 
+            print >>fp, sample_set.to_json() 
         # map work into chunks
         worker_basenames = []
         worker_chunks = []
@@ -139,8 +140,6 @@ def ssea_mapreduce(config):
         if os.path.exists(tmp_dir):
             shutil.rmtree(tmp_dir)
         logging.debug("Sample Set '%s' Done." % (sample_set.name))
-    # cleanup
-    bm.close()
     return 0
 
 def ssea_cluster_init(config, ssea_script):
@@ -166,6 +165,7 @@ def ssea_cluster_init(config, ssea_script):
         logging.debug("No size factors found in count matrix.. estimating")
         bm.estimate_size_factors('deseq')
     shape = bm.shape    
+    bm.close()
     # read/process sample sets
     sample_sets = read_sample_sets(config)
     for i,sample_set in enumerate(sample_sets):
@@ -194,7 +194,7 @@ def ssea_cluster_init(config, ssea_script):
         logging.debug("Writing sample set file")
         sample_set_file = os.path.join(sample_set_dir, Config.SAMPLE_SET_JSON_FILE) 
         with open(sample_set_file, 'w') as fp:
-            print >>fp, sample_set.to_json(bm.colnames) 
+            print >>fp, sample_set.to_json()
         # map work into chunks
         worker_file = os.path.join(sample_set_dir, CLUSTER_WORKER_FILE)
         num_workers = 0
