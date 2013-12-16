@@ -376,6 +376,7 @@ def ssea_cluster(config, ssea_script):
             f.write('\n'.join(lines))
         # submit reduce job
         qsub(lines)
+    return 0
 
 def ssea_cluster_map(output_dir):
     # open JSON files in output directory
@@ -445,7 +446,7 @@ def main():
             # get absolute path to this script
             ssea_script = os.path.abspath(sys.argv[0])
             # run on cluster
-            ssea_cluster(config, ssea_script)
+            retcode = ssea_cluster(config, ssea_script)
     elif config.cluster == 'map':
         retcode = ssea_cluster_map(config.output_dir)
     elif config.cluster == 'reduce':
