@@ -188,12 +188,12 @@ def ssea_rerun(result, bm, sample_set, row_metadata, col_metadata,
     # subset counts, size_factors, and membership array
     counts = counts[valid_inds]
     size_factors = bm.size_factors[valid_inds]
-    valid_membership = membership[valid_inds]
+    membership = membership[valid_inds]
     # reproduce previous run
     rng = RandomState(result.rand_seed)
     (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
      es_val, es_rank, es_run) = \
-        ssea_kernel(counts, size_factors, valid_membership, rng,
+        ssea_kernel(counts, size_factors, membership, rng,
                     resample_counts=False,
                     permute_samples=False,
                     add_noise=True,
