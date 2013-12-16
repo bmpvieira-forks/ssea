@@ -107,7 +107,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     elif median_es_val < 0:
         signfunc = np.less
     else:
-        signfunc = np.greater    
+        signfunc = np.greater
     # subset to include only the corresponding side of the distribution
     resample_sign_inds = signfunc(resample_es_vals, 0)
     resample_rand_seeds = resample_rand_seeds[resample_sign_inds]
@@ -122,10 +122,11 @@ def ssea_run(counts, size_factors, membership, rng, config):
     es_val = resample_es_vals[median_index]
     es_rank = resample_es_ranks[median_index]
     ranks = resample_count_ranks[median_index]
+    es_sign = cmp(es_val, 0)
     # permute samples and determine ES null distribution
     null_es_vals = np.zeros(config.perms, dtype=np.float) 
     null_es_ranks = np.zeros(config.perms, dtype=np.float)
-    for i in xrange(config.perms):
+    while i < config.perms:
         k = ssea_kernel(counts, size_factors, membership, rng,
                         resample_counts=True,
                         permute_samples=True,
@@ -136,8 +137,10 @@ def ssea_run(counts, size_factors, membership, rng, config):
                         method_hit=config.weight_hit,
                         method_param=config.weight_param)
         k = KernelResult._make(k)
-        null_es_vals[i] = k.es_val
-        null_es_ranks[i] = k.es_rank
+        if cmp(k.es_val, 0) == es_sign:
+            null_es_vals[i] = k.es_val
+            null_es_ranks[i] = k.es_rank
+            i += 1
     # Subset the null ES scores to only positive or negative 
     null_sign_inds = signfunc(null_es_vals, 0)
     null_es_vals = null_es_vals[null_sign_inds]
