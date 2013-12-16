@@ -136,8 +136,8 @@ def write_worker_info(filename, num_jobs, num_processes):
     with open(filename, 'w') as f:
         for startrow, endrow in chunk(num_jobs, num_processes):
             i = num_workers
-            logging.debug("Worker process %d range %d-%d (%d total rows)" % 
-                          (i, startrow, endrow, (endrow-startrow)))
+            #logging.debug("Worker process %d range %d-%d (%d total rows)" % 
+            #              (i, startrow, endrow, (endrow-startrow)))
             basename = 'w%d' % (i)
             fields = [i, basename, startrow, endrow]
             print >>f, '\t'.join(map(str,fields))
