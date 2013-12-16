@@ -259,8 +259,8 @@ def plot_enrichment(result, sseadata,
     ax2.set_xlim((0, len(sseadata.es_run)))
     ax2.set_xlabel('Samples')
     ax2.set_ylabel('Weights')
-    # draw
-    fig.tight_layout()
+    # TODO: this appears to cause errors in a platform-dependent manner
+    #fig.tight_layout()
     return fig
 
 def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set, 

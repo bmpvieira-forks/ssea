@@ -75,13 +75,14 @@ def ssea_run(counts, size_factors, membership, rng, config):
     rng: RandomState object
     config: Config object
     '''
-    # save random number generator seed
-    rand_seed = rng.seed
     # run kernel to generate a range of observed enrichment scores
+    resample_rand_seeds = np.empty(config.resampling_iterations, dtype=np.int)
     resample_count_ranks = np.empty((config.resampling_iterations, counts.shape[0]), dtype=np.int)
     resample_es_vals = np.zeros(config.resampling_iterations, dtype=np.float) 
     resample_es_ranks = np.zeros(config.resampling_iterations, dtype=np.int)
     for i in xrange(config.resampling_iterations):
+        # save random number generator seed before running kernel
+        resample_rand_seeds[i] = rng.seed
         k = ssea_kernel(counts, size_factors, membership, rng,
                         resample_counts=True,
                         permute_samples=False,
@@ -102,18 +103,22 @@ def ssea_run(counts, size_factors, membership, rng, config):
     # choose whether to use the positive or negative side of the 
     # distribution based on the median ES value
     if median_es_val == 0:
-        return Result.default()()
+        return Result.default(), np.zeros((0,), dtype=np.float)
     elif median_es_val < 0:
         signfunc = np.less
     else:
         signfunc = np.greater    
     # subset to include only the corresponding side of the distribution
     resample_sign_inds = signfunc(resample_es_vals, 0)
+    resample_rand_seeds = resample_rand_seeds[resample_sign_inds]
     resample_count_ranks = resample_count_ranks[resample_sign_inds]
     resample_es_vals = resample_es_vals[resample_sign_inds]
     resample_es_ranks = resample_es_ranks[resample_sign_inds]
+    # determine the median value
     median_index = int(resample_es_vals.shape[0] / 2)
     median_index = resample_es_vals.argsort()[median_index]
+    # select the kernel run representing the median ES value
+    rand_seed = resample_rand_seeds[median_index]
     es_val = resample_es_vals[median_index]
     es_rank = resample_es_ranks[median_index]
     ranks = resample_count_ranks[median_index]
@@ -248,24 +253,24 @@ def ssea_serial(config, sample_set, output_basename,
             # run ssea
             res, null_nes_vals = ssea_run(counts, size_factors, 
                                           valid_membership, rng, config)
+            # update histograms
+            null_keys = []
+            obs_keys = []
+            if res.es < 0:
+                null_keys.append('null_nes_neg')
+                obs_keys.append('obs_nes_neg')
+            elif res.es > 0:
+                null_keys.append('null_nes_pos')
+                obs_keys.append('obs_nes_pos')
+            for k in xrange(len(null_keys)):
+                null_nes = np.clip(np.fabs(null_nes_vals), NES_MIN, NES_MAX)
+                obs_nes = np.clip(np.fabs(res.nes), NES_MIN, NES_MAX)
+                hists[null_keys[k]] += np.histogram(null_nes, NES_BINS)[0]
+                hists[obs_keys[k]] += np.histogram(obs_nes, NES_BINS)[0]
         # save t_id
         res.t_id = i
         # convert to json and write
         print >>outfileh, res.to_json()
-        # update histograms
-        null_keys = []
-        obs_keys = []
-        if res.es < 0:
-            null_keys.append('null_nes_neg')
-            obs_keys.append('obs_nes_neg')
-        elif res.es > 0:
-            null_keys.append('null_nes_pos')
-            obs_keys.append('obs_nes_pos')
-        for k in xrange(len(null_keys)):
-            null_nes = np.clip(np.fabs(null_nes_vals), NES_MIN, NES_MAX)
-            obs_nes = np.clip(np.fabs(res.nes), NES_MIN, NES_MAX)
-            hists[null_keys[k]] += np.histogram(null_nes, NES_BINS)[0]
-            hists[obs_keys[k]] += np.histogram(obs_nes, NES_BINS)[0]
     # close report file
     outfileh.close()
     # save histograms to a file
