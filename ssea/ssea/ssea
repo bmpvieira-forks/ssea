@@ -297,7 +297,6 @@ def ssea_cluster(config, ssea_script):
     # process each sample set
     for ss_info in read_sample_set_info(sample_set_info_file):
         logging.info('Sample Set: %s' % (ss_info.name))
-        job_name = ss_info.output_dir
         # get output directory
         sample_set_path = os.path.abspath(os.path.join(config.output_dir, 
                                                        ss_info.dirname))
@@ -327,7 +326,7 @@ def ssea_cluster(config, ssea_script):
         # write map script
         lines = ['#!/bin/bash']
         lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (job_name))
+        lines.append('#PBS -N %s' % (ss_info.dirname))
         lines.append('#PBS -l %s' % (','.join(resource_fields)))
         lines.append('#PBS -t 0-%d' % (num_workers-1))
         lines.append('#PBS -V')
@@ -360,7 +359,7 @@ def ssea_cluster(config, ssea_script):
         resource_fields.append('pmem=3750mb')
         lines = ['#!/bin/bash']
         lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (job_name))
+        lines.append('#PBS -N %s' % (ss_info.dirname))
         lines.append('#PBS -l %s' % (','.join(resource_fields)))
         lines.append('#PBS -V')
         lines.append("#PBS -o %s" % (os.path.join(log_dir, 'reduce.stdout')))
