@@ -39,7 +39,7 @@ CLUSTER_MAPREDUCE_SCRIPT = 'run.pbs'
 JOB_DONE_FILE = 'job.done'
 
 # cluster walltime computation constants
-SECS_PER_ITER_MAP = 1.5e-7
+SECS_PER_ITER_MAP = 1.0e-6
 SECS_PER_ITER_REDUCE = 0.01
 HOURS_PER_SEC = (1.0 / 3600.0)
 PADDING_HOURS = 2.0
