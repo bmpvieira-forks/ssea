@@ -158,7 +158,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     p_value /= null_es_vals.shape[0]
     # Create result object for this SSEA test
     res = Result()
-    res.rand_seed = rand_seed
+    res.rand_seed = int(rand_seed)
     res.es = round(es_val, FLOAT_PRECISION)
     res.es_rank = int(es_rank)
     res.nominal_p_value = round(p_value, SCIENTIFIC_NOTATION_PRECISION)
