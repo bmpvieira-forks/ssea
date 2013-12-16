@@ -23,12 +23,14 @@ class Config(object):
     SAMPLE_SET_JSON_FILE = 'sample_set.json'
     RESULTS_JSON_FILE = 'results.json'
     OUTPUT_HISTS_FILE = 'hists.npz'
+    SAMPLE_SET_INFO_FILE = 'sample_sets.tsv'
     LOG_DIR = 'log'
     TMP_DIR = 'tmp'
     
     def __init__(self):
         self.num_processes = 1
         self.output_dir = "SSEA_%s" % (timestamp())
+        self.output_append = False
         self.perms = 1000
         self.resampling_iterations = 101
         self.weight_miss = WeightMethod.LOG
@@ -80,6 +82,8 @@ class Config(object):
         grp = parser.add_argument_group('Output Options')
         grp.add_argument('-o', '--output-dir', dest="output_dir", 
                          help='Output directory [default=%(default)s]')
+        grp.add_argument('-a', '--append', dest="output_append", 
+                         action="store_true")
         grp = parser.add_argument_group('Cluster Computing Options')
         clustergrp = grp.add_mutually_exclusive_group()
         clustergrp.add_argument('--cluster', dest='cluster', 
@@ -134,11 +138,11 @@ class Config(object):
         log_func("Parameters")
         log_func("----------------------------------")
         log_func("num processes:           %d" % (self.num_processes))
+        log_func("output directory:        %s" % (self.output_dir))
         log_func("permutations:            %d" % (self.perms))
         log_func("weight method miss:      %s" % (WEIGHT_METHOD_STR[self.weight_miss]))
         log_func("weight method hit:       %s" % (WEIGHT_METHOD_STR[self.weight_hit]))
         log_func("weight param:            %f" % (self.weight_param))
-        log_func("output directory:        %s" % (self.output_dir))
         log_func("input matrix directory:  %s" % (self.matrix_dir))
         log_func("----------------------------------")
 
@@ -161,7 +165,9 @@ class Config(object):
         # if in cluster mode only process relevant arguments
         if self.cluster is not None:
             if self.cluster != 'setup':
-                self.output_dir = os.path.abspath(args.output_dir)
+                # when run in cluster map or reduce mode output dir points 
+                # to the specific sample set directory being processed 
+                self.output_dir = args.output_dir
                 if not os.path.exists(self.output_dir):
                     parser.error("output directory '%s' not found by cluster map/reduce" % (self.output_dir))
                 return self
@@ -170,10 +176,13 @@ class Config(object):
             if not os.path.exists(args.pbs_script):
                 parser.error("pbs script '%s' not found" % (args.pbs_script))
         self.pbs_script = args.pbs_script
-        # output directory
-        self.output_dir = os.path.abspath(args.output_dir)
-        if os.path.exists(self.output_dir):
-            parser.error("Output directory '%s' already exists" % (args.output_dir))
+        # output
+        self.output_append = args.output_append
+        self.output_dir = args.output_dir
+        if (not self.output_append) and os.path.exists(self.output_dir):        
+            parser.error("Output directory '%s' already exists, run in "
+                         "append mode (-a | --append) to add additional "
+                         "sample sets to this output directory" % (args.output_dir))
         # process and check arguments
         self.num_processes = args.num_processes
         self.perms = max(1, args.perms)
