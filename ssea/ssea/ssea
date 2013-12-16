@@ -112,7 +112,7 @@ def read_sample_set_info(filename):
 
 def write_sample_set_info(ss_infos, filename):
     with open(filename, 'w') as fileh:
-        print >>fileh, '\t'.join(['id', 'dirname', 'name', 'desc', 'size'])
+        print >>fileh, '\t'.join(SSInfo._fields)
         for ss in ss_infos:
             fields = [str(ss.id), ss.dirname, ss.name, ss.desc, str(ss.size)]
             print >>fileh, '\t'.join(fields)
