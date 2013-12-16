@@ -96,7 +96,7 @@ class ReportConfig(object):
         log_func("----------------------------------")
         log_func("num processes:           %d" % (self.num_processes))
         log_func("input directory:         %s" % (self.input_dir))
-        log_func("input directory:         %s" % (self.output_dir))
+        log_func("output directory:        %s" % (self.output_dir))
         log_func("create html report:      %s" % (self.create_html))
         log_func("create pdf plots:        %s" % (self.create_pdf))
         log_func("thresholds:              %s" % (','.join(''.join(map(str,t)) for t in self.thresholds)))

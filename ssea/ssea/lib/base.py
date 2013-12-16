@@ -137,7 +137,7 @@ class SampleSet(object):
 
     def __repr__(self):
         return ("<%s(name=%s,desc=%s,value_dict=%s" % 
-                (self.__class__.__name__, self._id, self.name, self.desc,
+                (self.__class__.__name__, self.name, self.desc,
                  str(self.value_dict)))
         
     def __len__(self):
