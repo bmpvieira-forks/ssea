@@ -175,7 +175,7 @@ def ssea_setup(config, ssea_script=None):
     # read new sample sets
     for sample_set in sample_sets:
         if sample_set.name in ss_names:
-            logging.error('Sample Set "%s" already exists in output directory')
+            logging.error('Sample Set "%s" already exists in output directory' % (sample_set.name))
             return 1
         logging.info("Sample Set: %s" % (sample_set.name))
         # create sample set directory
