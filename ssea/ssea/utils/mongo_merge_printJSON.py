@@ -28,7 +28,8 @@ def main(argv=None):
     parser.add_argument("--host", dest = 'host',
                         default = 'localhost:27017',
                         help = 'name of mongodb server to connect to')
-    
+    parser.add_argument("--ss_id", dest = 'ss_id',
+                        help = 'mongo _id number of sample set being merged')
     # Process arguments
     args = parser.parse_args()
     # setup logging
@@ -50,7 +51,7 @@ def main(argv=None):
     i = 0
     for x in transcripts.find():
         i+=1
-        if (i % 25000) == 0:
+        if (i % 50000) == 0:
             logging.debug('Finished %d/%d' % (i, tot))
             
         key = x['_id']
@@ -65,15 +66,19 @@ def main(argv=None):
         id_dict['loc_strand'] = new_loc
         trans_dict[key] = id_dict
     
+    ss_id = int(args.ss_id)
     #print merged json
-    tot = results.find().count()
-    logging.info('Merging transcript metadata and results fields (%d total merged documents' % tot)
+    tot = results.find({'ss_id':ss_id}).count()
+    logging.info('Merging transcript metadata and results fields (%d total merged documents)' % tot)
     fields_results.append('_id')
-    for x in results.find():
+    for x in results.find({'ss_id':ss_id}):
         #create another dict placeholder to be printed as JSON
         dict = {}
         for field in fields_results: 
-            dict[field] = str(x[field])
+            if field == '_id':
+                dict[field] = str(x[field])
+            else: 
+                dict[field] = x[field]
         id = x['t_id']
         trans_meta = trans_dict[id]
         

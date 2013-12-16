@@ -43,6 +43,8 @@ def db_ssea_import(ssea_dir, matrix_dir, name, host):
         p1.wait()
         p2.wait()
         
+        ss.update({'_id':int(ss_id)}, {'$set':{'name':'TMP'}})
+        
 #         logging.info("Importing config file")
         p1 = subprocess.Popen(['python', _merge_path, ssea_dir, matrix_dir, ss_id, '-c'], stdout=subprocess.PIPE)
         p2 = subprocess.Popen(['mongoimport', '-c', 'configs', '--host', host, '-d', name, '--upsert'], stdin=p1.stdout)
@@ -63,13 +65,17 @@ def db_ssea_import(ssea_dir, matrix_dir, name, host):
         
 #         logging.info("Creating merge collection")
         _merge_path = os.path.join(_ssea_path, 'utils/mongo_merge_printJSON.py')
-        p1 = subprocess.Popen(['python', _merge_path, '--host', host, '--name', name], stdout=subprocess.PIPE)
+        p1 = subprocess.Popen(['python', _merge_path, '--ss_id', ss_id, '--host', host, '--name', name], stdout=subprocess.PIPE)
         p2 = subprocess.Popen(['mongoimport', '-c', 'merged', '--host', host, '-d', name, '--upsert'], stdin=p1.stdout)
         p1.wait()
         p2.wait()
-    
+        
+        ss.update({'_id':int(ss_id)}, {'$set':{'name':ss_name}})
+        
+            
         logging.info("Finished importing \'%s\'" % ss_name)
-    
+
+
 def main(argv=None):
     '''Command line options.'''    
     # Setup command line arguments

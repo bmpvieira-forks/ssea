@@ -24,7 +24,6 @@ _package_dir = ssea.__path__[0]
 def db_index(name, host):
     
     colls = db_connect(name, host)
-    print colls
     #index sample_sets collection
     logging.info('indexing sample_sets collection')
     ss = colls['sample_sets']

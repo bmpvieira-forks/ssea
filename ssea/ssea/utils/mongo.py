@@ -49,12 +49,12 @@ def db_connect(name, host):
     transcripts = db['transcripts']
     samples = db['samples']
     sample_sets = db['sample_sets']
-    config = db['config']
+    configs = db['configs']
     results = db['results']
     hists = db['hists']
     merged = db['merged']
     colls = {'transcripts':transcripts, 'samples':samples, 'sample_sets':sample_sets, 
-             'config':config, 'results':results, 'hists':hists, 'merged':merged}
+             'configs':configs, 'results':results, 'hists':hists, 'merged':merged}
     return colls
 
 def expression_import(name, host):

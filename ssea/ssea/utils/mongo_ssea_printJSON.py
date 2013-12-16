@@ -73,7 +73,7 @@ def db_ss_printJSON(ssea_dir, matrix_dir, ss_id):
     ss = SampleSet.parse_json(sample_sets_json_file)
     membership = ss.get_array(samples)
     d = ss.to_dict(membership)
-    d['_id'] = ss_id
+    d['_id'] = int(ss_id)
     print json.dumps(d)
     
 def db_config_printJSON(ssea_dir, ss_id):
@@ -81,7 +81,7 @@ def db_config_printJSON(ssea_dir, ss_id):
                                          'config.json')
     s = open(config_json_file).read()
     d = json.loads(s)
-    d['_id'] = ss_id
+    d['_id'] = int(ss_id)
     print json.dumps(d)
 
 def db_results_printJSON(ssea_dir, ss_id):
@@ -91,7 +91,7 @@ def db_results_printJSON(ssea_dir, ss_id):
         for line in fin:
             # load json document (one per line)
             result = Result.from_json(line.strip())  
-            result.ss_id = ss_id
+            result.ss_id = int(ss_id)
             print result.to_json()
 
 def db_hists_printJSON(ssea_dir, ss_id):
@@ -108,7 +108,7 @@ def db_hists_printJSON(ssea_dir, ss_id):
         d[field] =  list(x[field])
     
     d['nes_bins'] = list(NES_BINS)
-    d['_id'] = ss_id
+    d['_id'] = int(ss_id)
     print json.dumps(d)
     
 
