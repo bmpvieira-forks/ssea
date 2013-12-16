@@ -146,7 +146,7 @@ def write_worker_info(filename, num_jobs, num_processes):
     logging.debug("Worker processes: %d" % (num_workers))
     logging.debug("Max transcripts per worker: %d" % (max_chunk_size))
 
-def ssea_setup(config, ssea_script=None):
+def ssea_setup(config):
     # read pbs configuration commands (cluster mode only)
     pbs_script_lines = []
     if config.pbs_script is not None:
@@ -445,8 +445,8 @@ def main():
         else:
             # get absolute path to this script
             ssea_script = os.path.abspath(sys.argv[0])
-            # setup a new ssea run
-            retcode = ssea_setup(config, ssea_script)
+            # run on cluster
+            ssea_cluster(config, ssea_script)
     elif config.cluster == 'map':
         retcode = ssea_cluster_map(config.output_dir)
     elif config.cluster == 'reduce':
