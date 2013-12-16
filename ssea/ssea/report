@@ -53,6 +53,7 @@ class ReportConfig(object):
     def __init__(self):
         self.num_processes = 1
         self.input_dir = None
+        self.output_dir = None
         self.thresholds = []
         self.create_html = True
         self.create_pdf = True
@@ -67,6 +68,9 @@ class ReportConfig(object):
                             type=int, default=1,
                             help='Number of processor cores available '
                             '[default=%(default)s]')
+        parser.add_argument('-o', '--output-dir', dest='output_dir',
+                            help='Output directory [default will add '
+                            '"report" directory to input folder')
         grp = parser.add_argument_group("SSEA Report Options")
         grp.add_argument('--no-html', dest="create_html", 
                          action="store_false", default=self.create_html,
@@ -92,6 +96,7 @@ class ReportConfig(object):
         log_func("----------------------------------")
         log_func("num processes:           %d" % (self.num_processes))
         log_func("input directory:         %s" % (self.input_dir))
+        log_func("input directory:         %s" % (self.output_dir))
         log_func("create html report:      %s" % (self.create_html))
         log_func("create pdf plots:        %s" % (self.create_pdf))
         log_func("thresholds:              %s" % (','.join(''.join(map(str,t)) for t in self.thresholds)))
@@ -134,7 +139,10 @@ class ReportConfig(object):
             parser.error("input directory '%s' not found" % (args.input_dir))
         self.input_dir = args.input_dir
         # setup output directory
-        self.output_dir = os.path.join(self.input_dir, REPORT_DIR)
+        if args.output_dir is None:
+            self.output_dir = os.path.join(self.input_dir, REPORT_DIR)
+        else:
+            self.output_dir = args.output_dir
         if os.path.exists(self.output_dir):
             parser.error("Report directory '%s' already exists" % 
                          (self.output_dir))
@@ -186,14 +194,14 @@ def ssea_rerun(result, bm, sample_set, row_metadata, col_metadata,
     (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
      es_val, es_rank, es_run) = \
         ssea_kernel(counts, size_factors, valid_membership, rng,
-                     resample_counts=False,
-                     permute_samples=False,
-                     add_noise=True,
-                     noise_loc=sseaconfig.noise_loc, 
-                     noise_scale=sseaconfig.noise_scale,
-                     method_miss=sseaconfig.weight_miss,
-                     method_hit=sseaconfig.weight_hit,
-                     method_param=sseaconfig.weight_param)
+                    resample_counts=False,
+                    permute_samples=False,
+                    add_noise=True,
+                    noise_loc=sseaconfig.noise_loc, 
+                    noise_scale=sseaconfig.noise_scale,
+                    method_miss=sseaconfig.weight_miss,
+                    method_hit=sseaconfig.weight_hit,
+                    method_param=sseaconfig.weight_param)
     # make object for plotting
     m = membership[ranks]
     hit_indexes = (m > 0).nonzero()[0]
@@ -241,8 +249,9 @@ def plot_enrichment(result, sseadata,
     frame.set_linewidth(0)
     # membership in sample set
     ax1 = fig.add_subplot(gs[1])
-    ax1.vlines(sseadata.hit_indexes, ymin=0, ymax=1, lw=0.25, 
-               color='black', label='Hits')
+    if len(sseadata.hit_indexes) > 0:
+        ax1.vlines(sseadata.hit_indexes, ymin=0, ymax=1, lw=0.25, 
+                   color='black', label='Hits')
     ax1.set_xlim((0, len(sseadata.es_run)))
     ax1.set_ylim((0, 1))
     ax1.set_xticks([])
