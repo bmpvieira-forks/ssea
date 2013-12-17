@@ -36,26 +36,50 @@ WORKER_FILE = 'workers.txt'
 CLUSTER_MAP_SCRIPT = 'map.pbs'
 CLUSTER_REDUCE_SCRIPT = 'reduce.pbs'
 CLUSTER_MAPREDUCE_SCRIPT = 'run.pbs'
-JOB_DONE_FILE = 'job.done'
-
-# cluster walltime computation constants
+# Cluster walltime computation constants
 SECS_PER_ITER_MAP = 1.0e-6
 SECS_PER_ITER_REDUCE = 0.01
 HOURS_PER_SEC = (1.0 / 3600.0)
 PADDING_HOURS = 2.0
-
-# sample set info
+# Sample set info
 SSInfo = namedtuple('SSInfo', ('id', 'name', 'desc', 'size', 'dirname'))
 # worker process info
 WorkerInfo = namedtuple('WorkerInfo', ('id', 'basename', 'startrow', 'endrow'))
+
+class JobStatus:
+    DONE = 'job.done'
+    BUSY = 'job.busy'
+    READY = 'job.ready'
+    @staticmethod
+    def set(path, status):
+        status_path = os.path.join(path, status)
+        assert not os.path.exists(status_path)
+        # clear other status
+        for other_status in (JobStatus.DONE, JobStatus.BUSY, JobStatus.READY):
+            other_path = os.path.join(path, other_status)
+            if os.path.exists(other_path):
+                os.remove(other_path)
+        # set this status
+        open(status_path, 'w').close()
+    @staticmethod
+    def get(path):
+        if os.path.exists(os.path.join(path, JobStatus.DONE)):
+            return JobStatus.DONE 
+        elif os.path.exists(os.path.join(path, JobStatus.BUSY)):
+            return JobStatus.BUSY
+        return JobStatus.READY    
 
 def qsub(lines):
     '''function to submit a job using qsub'''
     p = subprocess.Popen("qsub", stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     p.stdin.write('\n'.join(lines))
-    job_id = p.communicate()[0]
-    return job_id.strip()
-    
+    stdoutdata = p.communicate()[0]
+    # check return code
+    if p.returncode != 0:
+        return None
+    job_id = stdoutdata.strip()
+    return job_id
+  
 def read_sample_sets(config):
     '''
     config: ssea.lib.Config object with SSEA options specified
@@ -147,11 +171,6 @@ def write_worker_info(filename, num_jobs, num_processes):
     logging.debug("Max transcripts per worker: %d" % (max_chunk_size))
 
 def ssea_setup(config):
-    # read pbs configuration commands (cluster mode only)
-    pbs_script_lines = []
-    if config.pbs_script is not None:
-        with open(config.pbs_script) as f:
-            pbs_script_lines.extend(line.strip() for line in f)
     # create output directory
     if not os.path.exists(config.output_dir):
         logging.debug("Creating output directory '%s'" % (config.output_dir))
@@ -176,7 +195,8 @@ def ssea_setup(config):
     for sample_set in sample_sets:
         logging.info("Sample Set: %s" % (sample_set.name))
         if sample_set.name in ss_names:
-            logging.error('Sample Set "%s" already exists in output directory' % (sample_set.name))
+            logging.error('Sample Set "%s" already exists in output '
+                          'directory' % (sample_set.name))
             return 1
         # create sample set directory
         ss_id = len(ss_infos)
@@ -218,62 +238,16 @@ def ssea_setup(config):
                          size=len(sample_set),
                          dirname=sample_set_dirname)
         ss_infos.append(ss_info)
+        # mark job status as ready
+        JobStatus.set(sample_set_path, JobStatus.READY)
     # write sample set info list
     write_sample_set_info(ss_infos, sample_set_info_file)
     return 0
 
-def ssea_multiprocessing(config):
+def ssea_start(config, ssea_script):
     '''
     multiprocessing map/reduce implementation of ssea    
     '''
-    # check output directory
-    if not os.path.exists(config.output_dir):
-        logging.error("Output directory '%s' not found" % 
-                      (config.output_dir))
-        return 1
-    sample_set_info_file = os.path.join(config.output_dir, 
-                                        Config.SAMPLE_SET_INFO_FILE)
-    if not os.path.exists(sample_set_info_file):
-        logging.error("Sample set info file '%s' not found" % 
-                      (sample_set_info_file))
-        return 1
-    # process each sample set
-    for ss_info in read_sample_set_info(sample_set_info_file):
-        logging.info('Sample Set: %s' % (ss_info.name))
-        # get output directory
-        sample_set_path = os.path.join(config.output_dir, ss_info.dirname)
-        tmp_dir = os.path.join(sample_set_path, Config.TMP_DIR)
-        # read config
-        config_json_file = os.path.join(sample_set_path, Config.CONFIG_JSON_FILE)
-        config = Config.parse_json(config_json_file)
-        # read sample sets
-        sample_set_json_file = os.path.join(sample_set_path, Config.SAMPLE_SET_JSON_FILE)
-        sample_set = SampleSet.parse_json(sample_set_json_file)
-        # read worker information
-        worker_file = os.path.join(sample_set_path, WORKER_FILE)
-        worker_infos = read_worker_info(worker_file)
-        worker_basenames = [os.path.join(tmp_dir, w.basename) for w in worker_infos]
-        worker_chunks = [(w.startrow, w.endrow) for w in worker_infos]
-        # output files
-        logging.info("Running SSEA map step with %d parallel processes " % 
-                     (len(worker_infos)))
-        # map step
-        ssea_map(config, sample_set, worker_basenames, worker_chunks)
-        # reduce step
-        logging.info("Running SSEA reduce step")
-        hists_file = os.path.join(sample_set_path, Config.OUTPUT_HISTS_FILE)
-        json_file = os.path.join(sample_set_path, Config.RESULTS_JSON_FILE)
-        ssea_reduce(worker_basenames, json_file, hists_file)
-        # cleanup
-        if os.path.exists(tmp_dir):
-            shutil.rmtree(tmp_dir)
-        # mark done
-        job_done_file = os.path.join(sample_set_path, JOB_DONE_FILE)
-        open(job_done_file, 'w').close()
-        logging.debug("Sample Set '%s' Done." % (sample_set.name))
-    return 0
-
-def ssea_cluster(config, ssea_script):
     # check output directory
     if not os.path.exists(config.output_dir):
         logging.error("Output directory '%s' not found" % 
@@ -298,84 +272,124 @@ def ssea_cluster(config, ssea_script):
     for ss_info in read_sample_set_info(sample_set_info_file):
         logging.info('Sample Set: %s' % (ss_info.name))
         # get output directory
-        sample_set_path = os.path.abspath(os.path.join(config.output_dir, 
-                                                       ss_info.dirname))
+        sample_set_path = os.path.join(config.output_dir, ss_info.dirname)
+        # check that job is not already running or done
+        if JobStatus.get(sample_set_path) != JobStatus.READY:
+            logging.info("Skipping Sample Set: %s DONE/BUSY" % (ss_info.name))
+            continue
+        # set job as busy (job will now be run)
+        JobStatus.set(sample_set_path, JobStatus.BUSY)
+        tmp_dir = os.path.join(sample_set_path, Config.TMP_DIR)
         log_dir = os.path.join(sample_set_path, Config.LOG_DIR)
+        # read config
+        config_json_file = os.path.join(sample_set_path, Config.CONFIG_JSON_FILE)
+        config = Config.parse_json(config_json_file)
+        # read sample sets
+        sample_set_json_file = os.path.join(sample_set_path, Config.SAMPLE_SET_JSON_FILE)
+        sample_set = SampleSet.parse_json(sample_set_json_file)
         # read worker information
         worker_file = os.path.join(sample_set_path, WORKER_FILE)
         worker_infos = read_worker_info(worker_file)
-        max_chunk_size = max((w.endrow - w.startrow) for w in worker_infos)
-        num_workers = len(worker_infos)
-        # calculate job walltime
-        num_tests = (max_chunk_size * shape[1] * 
-                     (1 + config.perms + config.resampling_iterations))
-        hours = (num_tests * SECS_PER_ITER_MAP * HOURS_PER_SEC)
-        padded_hours = int(hours + PADDING_HOURS) # padding
-        logging.debug('Map step walltime calculation: %d rows/chunk %d '
-                      'samples %d perms %d resamplings' %
-                      (max_chunk_size, shape[1], config.perms, 
-                       config.resampling_iterations))
-        logging.debug('\tAt %fs per iteration this will take %f hours' % 
-                      (SECS_PER_ITER_MAP, hours))
-        logging.debug('\tPadded walltime is %dh' % (padded_hours))
-        # make pbs resource fields
-        resource_fields = []
-        resource_fields.append('walltime=%d:00:00' % (padded_hours))
-        resource_fields.append('nodes=1:ppn=1')
-        resource_fields.append('pmem=1024mb')
-        # write map script
-        lines = ['#!/bin/bash']
-        lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (ss_info.dirname))
-        lines.append('#PBS -l %s' % (','.join(resource_fields)))
-        lines.append('#PBS -t 0-%d' % (num_workers-1))
-        lines.append('#PBS -V')
-        lines.append("#PBS -o %s" % (os.path.join(log_dir, 'map.stdout')))
-        lines.append("#PBS -e %s" % (os.path.join(log_dir, 'map.stderr')))
-        # command line args
-        args = ['python', ssea_script, '-v', '--cluster-map', '-o', 
-                sample_set_path]
-        lines.append(' '.join(args))
-        lines.append('')
-        # write script to file
-        script_file = os.path.join(sample_set_path, CLUSTER_MAP_SCRIPT)
-        with open(script_file, 'w') as f:
-            f.write('\n'.join(lines))
-        # submit map job
-        job_array_id = qsub(lines)
-        logging.debug('Submitted map job array id=%s' % (job_array_id))
-        # calculate walltime for reduce step
-        num_results = shape[0]
-        hours = (num_results * SECS_PER_ITER_REDUCE * HOURS_PER_SEC)
-        padded_hours = int(hours + PADDING_HOURS) # padding
-        logging.debug('Reduce walltime calculation: %d rows' % (shape[0])) 
-        logging.debug('\tAt %fs per iteration this will take %f hours' % 
-                      (SECS_PER_ITER_REDUCE, hours))
-        logging.debug('\tPadded reduce walltime is %dh' % (padded_hours))
-        # make pbs resource fields
-        resource_fields = []
-        resource_fields.append('walltime=%d:00:00' % (padded_hours))
-        resource_fields.append('nodes=1:ppn=1')
-        resource_fields.append('pmem=3750mb')
-        lines = ['#!/bin/bash']
-        lines.extend(pbs_script_lines)
-        lines.append('#PBS -N %s' % (ss_info.dirname))
-        lines.append('#PBS -l %s' % (','.join(resource_fields)))
-        lines.append('#PBS -V')
-        lines.append("#PBS -o %s" % (os.path.join(log_dir, 'reduce.stdout')))
-        lines.append("#PBS -e %s" % (os.path.join(log_dir, 'reduce.stderr')))
-        lines.append("#PBS -W depend=afterokarray:%s" % (job_array_id))
-        # command line args
-        args = ['python', ssea_script, '-v', '--cluster-reduce', '-o', 
-                sample_set_path]
-        lines.append(' '.join(args))
-        lines.append('')
-        # write script to file
-        script_file = os.path.join(sample_set_path, CLUSTER_REDUCE_SCRIPT)
-        with open(script_file, 'w') as f:
-            f.write('\n'.join(lines))
-        # submit reduce job
-        qsub(lines)
+        if config.cluster is None:        
+            worker_basenames = [os.path.join(tmp_dir, w.basename) for w in worker_infos]
+            worker_chunks = [(w.startrow, w.endrow) for w in worker_infos]
+            # output files
+            logging.info("Running SSEA map step with %d parallel processes " % 
+                         (len(worker_infos)))
+            # map step
+            ssea_map(config, sample_set, worker_basenames, worker_chunks)
+            # reduce step
+            logging.info("Running SSEA reduce step")
+            hists_file = os.path.join(sample_set_path, Config.OUTPUT_HISTS_FILE)
+            json_file = os.path.join(sample_set_path, Config.RESULTS_JSON_FILE)
+            ssea_reduce(worker_basenames, json_file, hists_file)
+            # cleanup
+            if os.path.exists(tmp_dir):
+                shutil.rmtree(tmp_dir)
+            # mark done
+            logging.debug("Sample Set '%s' Done." % (sample_set.name))
+            JobStatus.set(sample_set_path, JobStatus.DONE)
+        else:
+            max_chunk_size = max((w.endrow - w.startrow) for w in worker_infos)
+            num_workers = len(worker_infos)
+            # calculate job walltime
+            num_tests = (max_chunk_size * shape[1] * 
+                         (1 + config.perms + config.resampling_iterations))
+            hours = (num_tests * SECS_PER_ITER_MAP * HOURS_PER_SEC)
+            padded_hours = int(hours + PADDING_HOURS) # padding
+            logging.debug('Map step walltime calculation: %d rows/chunk %d '
+                          'samples %d perms %d resamplings' %
+                          (max_chunk_size, shape[1], config.perms, 
+                           config.resampling_iterations))
+            logging.debug('\tAt %fs per iteration this will take %f hours' % 
+                          (SECS_PER_ITER_MAP, hours))
+            logging.debug('\tPadded walltime is %dh' % (padded_hours))
+            # make pbs resource fields
+            resource_fields = []
+            resource_fields.append('walltime=%d:00:00' % (padded_hours))
+            resource_fields.append('nodes=1:ppn=1')
+            resource_fields.append('pmem=1024mb')
+            # write map script
+            lines = ['#!/bin/bash']
+            lines.extend(pbs_script_lines)
+            lines.append('#PBS -N %s' % (ss_info.dirname))
+            lines.append('#PBS -l %s' % (','.join(resource_fields)))
+            lines.append('#PBS -t 0-%d' % (num_workers-1))
+            lines.append('#PBS -V')
+            lines.append("#PBS -o %s" % (os.path.join(log_dir, 'map.stdout')))
+            lines.append("#PBS -e %s" % (os.path.join(log_dir, 'map.stderr')))
+            # command line args
+            args = ['python', ssea_script, '-v', '--cluster-map', '-o', 
+                    sample_set_path]
+            lines.append(' '.join(args))
+            lines.append('')
+            # write script to file
+            script_file = os.path.join(sample_set_path, CLUSTER_MAP_SCRIPT)
+            with open(script_file, 'w') as f:
+                f.write('\n'.join(lines))
+            # try to submit map job
+            job_array_id = qsub(lines)
+            if job_array_id is None:
+                logging.error('Failed to submit job array, skipping job')
+                JobStatus.set(sample_set_path, JobStatus.READY)
+                continue
+            logging.debug('Submitted map job array id=%s' % (job_array_id))
+            # calculate walltime for reduce step
+            num_results = shape[0]
+            hours = (num_results * SECS_PER_ITER_REDUCE * HOURS_PER_SEC)
+            padded_hours = int(hours + PADDING_HOURS) # padding
+            logging.debug('Reduce walltime calculation: %d rows' % (shape[0])) 
+            logging.debug('\tAt %fs per iteration this will take %f hours' % 
+                          (SECS_PER_ITER_REDUCE, hours))
+            logging.debug('\tPadded reduce walltime is %dh' % (padded_hours))
+            # make pbs resource fields
+            resource_fields = []
+            resource_fields.append('walltime=%d:00:00' % (padded_hours))
+            resource_fields.append('nodes=1:ppn=1')
+            resource_fields.append('pmem=3750mb')
+            lines = ['#!/bin/bash']
+            lines.extend(pbs_script_lines)
+            lines.append('#PBS -N %s' % (ss_info.dirname))
+            lines.append('#PBS -l %s' % (','.join(resource_fields)))
+            lines.append('#PBS -V')
+            lines.append("#PBS -o %s" % (os.path.join(log_dir, 'reduce.stdout')))
+            lines.append("#PBS -e %s" % (os.path.join(log_dir, 'reduce.stderr')))
+            lines.append("#PBS -W depend=afterokarray:%s" % (job_array_id))
+            # command line args
+            args = ['python', ssea_script, '-v', '--cluster-reduce', '-o', 
+                    sample_set_path]
+            lines.append(' '.join(args))
+            lines.append('')
+            # write script to file
+            script_file = os.path.join(sample_set_path, CLUSTER_REDUCE_SCRIPT)
+            with open(script_file, 'w') as f:
+                f.write('\n'.join(lines))
+            # submit reduce job
+            job_id = qsub(lines)
+            if job_id is None:
+                logging.error('Failed to submit reduce job, skipping job')
+                JobStatus.set(sample_set_path, JobStatus.READY)
+                continue            
     return 0
 
 def ssea_cluster_map(output_dir):
@@ -424,8 +438,7 @@ def ssea_cluster_reduce(output_dir):
     if os.path.exists(tmp_dir):
         shutil.rmtree(tmp_dir)
     # mark done
-    job_done_file = os.path.join(output_dir, JOB_DONE_FILE)
-    open(job_done_file, 'w').close()
+    JobStatus.set(output_dir, JobStatus.DONE)
     logging.debug("Done.")
     return 0
 
@@ -439,14 +452,9 @@ def main():
         (config.cluster == 'setup')):
         # setup run
         ssea_setup(config)
-        if config.cluster is None:
-            # run on a single machine (not a cluster)
-            retcode = ssea_multiprocessing(config)
-        else:
-            # get absolute path to this script
-            ssea_script = os.path.abspath(sys.argv[0])
-            # run on cluster
-            retcode = ssea_cluster(config, ssea_script)
+        # get absolute path to this script
+        ssea_script = os.path.abspath(sys.argv[0])
+        retcode = ssea_start(config, ssea_script)
     elif config.cluster == 'map':
         retcode = ssea_cluster_map(config.output_dir)
     elif config.cluster == 'reduce':

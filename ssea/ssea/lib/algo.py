@@ -440,3 +440,4 @@ def ssea_reduce(input_basenames, output_json_file, output_hist_file):
         os.remove(hist_file)
         json_file = input_basenames[i] + JSON_SORTED_SUFFIX
         os.remove(json_file)
+    return 0
