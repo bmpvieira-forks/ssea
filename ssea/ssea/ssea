@@ -42,7 +42,7 @@ SECS_PER_ITER_REDUCE = 0.01
 HOURS_PER_SEC = (1.0 / 3600.0)
 PADDING_HOURS = 2.0
 # Sample set info
-SSInfo = namedtuple('SSInfo', ('id', 'name', 'desc', 'size', 'dirname'))
+SSInfo = namedtuple('SSInfo', ('id', 'dirname', 'name', 'desc', 'size'))
 # worker process info
 WorkerInfo = namedtuple('WorkerInfo', ('id', 'basename', 'startrow', 'endrow'))
 
@@ -233,10 +233,10 @@ def ssea_setup(config):
                           num_processes=config.num_processes)
         # add to sample set info list
         ss_info = SSInfo(id=ss_id, 
+                         dirname=sample_set_dirname,
                          name=sample_set.name, 
                          desc=sample_set.desc, 
-                         size=len(sample_set),
-                         dirname=sample_set_dirname)
+                         size=len(sample_set))
         ss_infos.append(ss_info)
         # mark job status as ready
         JobStatus.set(sample_set_path, JobStatus.READY)
@@ -312,6 +312,7 @@ def ssea_start(config, ssea_script):
         else:
             max_chunk_size = max((w.endrow - w.startrow) for w in worker_infos)
             num_workers = len(worker_infos)
+            sample_set_abspath = os.path.abspath(sample_set_path)
             # calculate job walltime
             num_tests = (max_chunk_size * shape[1] * 
                          (1 + config.perms + config.resampling_iterations))
@@ -340,7 +341,7 @@ def ssea_start(config, ssea_script):
             lines.append("#PBS -e %s" % (os.path.join(log_dir, 'map.stderr')))
             # command line args
             args = ['python', ssea_script, '-v', '--cluster-map', '-o', 
-                    sample_set_path]
+                    sample_set_abspath]
             lines.append(' '.join(args))
             lines.append('')
             # write script to file
@@ -377,7 +378,7 @@ def ssea_start(config, ssea_script):
             lines.append("#PBS -W depend=afterokarray:%s" % (job_array_id))
             # command line args
             args = ['python', ssea_script, '-v', '--cluster-reduce', '-o', 
-                    sample_set_path]
+                    sample_set_abspath]
             lines.append(' '.join(args))
             lines.append('')
             # write script to file
