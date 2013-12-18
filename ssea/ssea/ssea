@@ -389,7 +389,7 @@ def ssea_start(config, ssea_script):
             if job_id is None:
                 logging.error('Failed to submit reduce job, skipping job')
                 JobStatus.set(sample_set_path, JobStatus.READY)
-                continue            
+                continue
     return 0
 
 def ssea_cluster_map(output_dir):
