@@ -195,9 +195,9 @@ def ssea_setup(config):
     for sample_set in sample_sets:
         logging.info("Sample Set: %s" % (sample_set.name))
         if sample_set.name in ss_names:
-            logging.error('Sample Set "%s" already exists in output '
-                          'directory' % (sample_set.name))
-            return 1
+            logging.warning('Sample Set "%s" already exists in output '
+                            'directory' % (sample_set.name))
+            continue
         # create sample set directory
         ss_id = len(ss_infos)
         sample_set_dirname = 'ss_%d' % (ss_id)
@@ -273,6 +273,9 @@ def ssea_start(config, ssea_script):
         logging.info('Sample Set: %s' % (ss_info.name))
         # get output directory
         sample_set_path = os.path.join(config.output_dir, ss_info.dirname)
+        if not os.path.exists(sample_set_path):
+            logging.warning('Could not find run folder for sample Set "%s"' % (ss_info.name))
+            continue
         # check that job is not already running or done
         if JobStatus.get(sample_set_path) != JobStatus.READY:
             logging.info("Skipping Sample Set: %s DONE/BUSY" % (ss_info.name))
