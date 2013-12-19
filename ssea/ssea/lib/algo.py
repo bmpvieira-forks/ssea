@@ -74,7 +74,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     membership: int array (0 or 1) with set membership
     rng: RandomState object
     config: Config object
-    '''
+    '''    
     # run kernel to generate a range of observed enrichment scores
     resample_rand_seeds = np.empty(config.resampling_iterations, dtype=np.int)
     resample_count_ranks = np.empty((config.resampling_iterations, counts.shape[0]), dtype=np.int)
