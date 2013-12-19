@@ -357,7 +357,7 @@ def ssea_start(config, ssea_script):
                 logging.error('Failed to submit job array, skipping job')
                 JobStatus.set(sample_set_path, JobStatus.READY)
                 continue
-            logging.debug('Submitted map job array id=%s' % (job_array_id))
+            logging.info('Submitted map job array id=%s' % (job_array_id))
             # calculate walltime for reduce step
             num_results = shape[0]
             hours = (num_results * SECS_PER_ITER_REDUCE * HOURS_PER_SEC)
@@ -394,6 +394,7 @@ def ssea_start(config, ssea_script):
                 logging.error('Failed to submit reduce job, skipping job')
                 JobStatus.set(sample_set_path, JobStatus.READY)
                 continue
+            logging.info('Submitted reduce job id=%s' % (job_id))
     return 0
 
 def ssea_cluster_map(output_dir):

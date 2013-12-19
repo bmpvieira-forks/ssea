@@ -126,6 +126,7 @@ def ssea_run(counts, size_factors, membership, rng, config):
     # permute samples and determine ES null distribution
     null_es_vals = np.zeros(config.perms, dtype=np.float) 
     null_es_ranks = np.zeros(config.perms, dtype=np.float)
+    i = 0
     while i < config.perms:
         k = ssea_kernel(counts, size_factors, membership, rng,
                         resample_counts=True,

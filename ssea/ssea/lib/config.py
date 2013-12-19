@@ -179,6 +179,8 @@ class Config(object):
         # output
         self.output_append = args.output_append
         self.output_dir = args.output_dir
+        if self.output_dir is None:
+            parser.error("Please specify an output directory using -o or --output-dir")
         if (not self.output_append) and os.path.exists(self.output_dir):        
             parser.error("Output directory '%s' already exists, run in "
                          "append mode (-a | --append) to add additional "
