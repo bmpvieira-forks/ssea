@@ -211,21 +211,25 @@ class Config(object):
             parser.error('matrix path "%s" not found' % (args.matrix_dir))
         self.matrix_dir = os.path.abspath(args.matrix_dir)
         # check sample sets
+        nsets = 0
         if args.smx_files is not None:
             for filename in args.smx_files:
                 if not os.path.exists(filename):
                     parser.error("smx file '%s' not found" % (filename))
                 self.smx_files.append(filename)
+                nsets += 1
         if args.smt_files is not None:
             for filename in args.smt_files:
                 if not os.path.exists(filename):
                     parser.error("smt file '%s' not found" % (filename))
                 self.smt_files.append(filename)
+                nsets += 1
         if args.json_files is not None:
             for filename in args.json_files:
                 if not os.path.exists(filename):
                     parser.error("json file '%s' not found" % (filename))
                 self.json_files.append(filename)
-        if len(self.smx_files) == 0 and len(self.smt_files) == 0:
+                nsets += 1
+        if nsets == 0:
             parser.error("No sample sets specified")
         return self
