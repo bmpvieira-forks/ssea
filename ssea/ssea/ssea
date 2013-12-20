@@ -95,6 +95,9 @@ def read_sample_sets(config):
     for filename in config.smt_files:
         logging.debug("\tFile: %s" % (filename))
         sample_sets.extend(SampleSet.parse_smt(filename))
+    for filename in config.json_files:
+        logging.debug('\tFile: %s' % (filename))
+        sample_sets.append(SampleSet.parse_json(filename))
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:

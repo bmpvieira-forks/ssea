@@ -42,6 +42,7 @@ class Config(object):
         self.smax = Config.DEFAULT_SMAX
         self.smx_files = []
         self.smt_files = []
+        self.json_files = []
         self.matrix_dir = None
         # for running on pbs cluster
         self.cluster = None
@@ -130,6 +131,8 @@ class Config(object):
                          help='File(s) containing sets in column format')
         grp.add_argument('--smt', dest="smt_files", action='append',
                          help='File(s) containing sets in row format')
+        grp.add_argument('--json', dest='json_file', action='append',
+                         help='File(s) containing sets in JSON format')
         grp.add_argument('--matrix', dest='matrix_dir', default=None, 
                          help='Directory with binary memory-mapped count matrix files')
         return parser
@@ -218,6 +221,11 @@ class Config(object):
                 if not os.path.exists(filename):
                     parser.error("smt file '%s' not found" % (filename))
                 self.smt_files.append(filename)
+        if args.json_files is not None:
+            for filename in args.json_files:
+                if not os.path.exists(filename):
+                    parser.error("json file '%s' not found" % (filename))
+                self.json_files.append(filename)
         if len(self.smx_files) == 0 and len(self.smt_files) == 0:
             parser.error("No sample sets specified")
         return self
