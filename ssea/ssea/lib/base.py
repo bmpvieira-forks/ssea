@@ -155,7 +155,8 @@ class SampleSet(object):
     @staticmethod
     def parse_json(filename):
         with open(filename, 'r') as f:
-            return SampleSet.from_json(f.next().strip())
+            for line in f:
+                SampleSet.from_json(line.strip())
 
     def to_json(self):
         d = {'name': self.name,

@@ -97,7 +97,7 @@ def read_sample_sets(config):
         sample_sets.extend(SampleSet.parse_smt(filename))
     for filename in config.json_files:
         logging.debug('\tFile: %s' % (filename))
-        sample_sets.append(SampleSet.parse_json(filename))
+        sample_sets.extend(SampleSet.parse_json(filename))
     logging.info("\tNumber of sample sets: %d" % (len(sample_sets)))
     filtered_sample_sets = []
     for sample_set in sample_sets:
@@ -292,7 +292,7 @@ def ssea_start(config, ssea_script):
         config = Config.parse_json(config_json_file)
         # read sample sets
         sample_set_json_file = os.path.join(sample_set_path, Config.SAMPLE_SET_JSON_FILE)
-        sample_set = SampleSet.parse_json(sample_set_json_file)
+        sample_set = SampleSet.parse_json(sample_set_json_file)[0]
         # read worker information
         worker_file = os.path.join(sample_set_path, WORKER_FILE)
         worker_infos = read_worker_info(worker_file)
@@ -407,7 +407,7 @@ def ssea_cluster_map(output_dir):
     config = Config.parse_json(config_json_file)
     # read sample sets
     sample_set_json_file = os.path.join(output_dir, Config.SAMPLE_SET_JSON_FILE)
-    sample_set = SampleSet.parse_json(sample_set_json_file)
+    sample_set = SampleSet.parse_json(sample_set_json_file)[0]
     # the PBS_ARRAY_INDEX environment variable should be set
     worker_index = os.environ.get('PBS_ARRAYID', None)
     if worker_index is None:

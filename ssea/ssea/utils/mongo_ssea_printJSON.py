@@ -70,7 +70,7 @@ def db_ss_printJSON(ssea_dir, matrix_dir, ss_id):
                                          'sample_set.json')
     bm = BigCountMatrix.open(matrix_dir)
     samples = bm.colnames
-    ss = SampleSet.parse_json(sample_sets_json_file)
+    ss = SampleSet.parse_json(sample_sets_json_file)[0]
     membership = ss.get_array(samples)
     d = ss.to_dict(membership)
     d['_id'] = int(ss_id)
