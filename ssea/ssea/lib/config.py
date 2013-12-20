@@ -131,7 +131,7 @@ class Config(object):
                          help='File(s) containing sets in column format')
         grp.add_argument('--smt', dest="smt_files", action='append',
                          help='File(s) containing sets in row format')
-        grp.add_argument('--json', dest='json_file', action='append',
+        grp.add_argument('--json', dest='json_files', action='append',
                          help='File(s) containing sets in JSON format')
         grp.add_argument('--matrix', dest='matrix_dir', default=None, 
                          help='Directory with binary memory-mapped count matrix files')
