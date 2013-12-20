@@ -147,17 +147,6 @@ class SampleSet(object):
         return np.array([self.value_dict.get(x, SampleSet.MISSING_VALUE) 
                          for x in samples], dtype=SampleSet.DTYPE)
     
-    @staticmethod
-    def from_json(s):
-        d = json.loads(s)
-        return SampleSet(**d)
-       
-    @staticmethod
-    def parse_json(filename):
-        with open(filename, 'r') as f:
-            for line in f:
-                SampleSet.from_json(line.strip())
-
     def to_json(self):
         d = {'name': self.name,
              'desc': self.desc,
@@ -170,6 +159,19 @@ class SampleSet(object):
              'membership': str(membership)}
         return d
 
+    @staticmethod
+    def from_json(s):
+        d = json.loads(s)
+        return SampleSet(**d)
+       
+    @staticmethod
+    def parse_json(filename):
+        sample_sets = []
+        with open(filename, 'r') as f:
+            for line in f:
+                sample_sets.append(SampleSet.from_json(line.strip()))
+        return sample_sets
+    
     @staticmethod
     def parse_smx(filename, sep='\t'):
         '''
