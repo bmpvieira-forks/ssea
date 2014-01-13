@@ -37,7 +37,7 @@ CLUSTER_MAP_SCRIPT = 'map.pbs'
 CLUSTER_REDUCE_SCRIPT = 'reduce.pbs'
 CLUSTER_MAPREDUCE_SCRIPT = 'run.pbs'
 # Cluster walltime computation constants
-SECS_PER_ITER_MAP = 1.0e-6
+SECS_PER_ITER_MAP = 2.0e-6
 SECS_PER_ITER_REDUCE = 0.01
 HOURS_PER_SEC = (1.0 / 3600.0)
 PADDING_HOURS = 2.0
@@ -194,6 +194,7 @@ def ssea_setup(config):
     if os.path.exists(sample_set_info_file):
         ss_infos.extend(read_sample_set_info(sample_set_info_file))
     ss_names = set([ss.name for ss in ss_infos])
+    max_ss_id = max(ss.id for ss in ss_infos)
     # read new sample sets
     for sample_set in sample_sets:
         logging.info("Sample Set: %s" % (sample_set.name))
@@ -202,10 +203,11 @@ def ssea_setup(config):
                             'directory' % (sample_set.name))
             continue
         # create sample set directory
-        ss_id = len(ss_infos)
+        ss_id = (max_ss_id + 1)
         sample_set_dirname = 'ss_%d' % (ss_id)
         sample_set_path = os.path.join(config.output_dir, sample_set_dirname)
         assert not os.path.exists(sample_set_path)
+        max_ss_id += 1
         if not os.path.exists(sample_set_path):
             logging.debug("Creating sample set directory '%s'" % (sample_set_path))
             os.makedirs(sample_set_path)

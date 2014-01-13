@@ -4,8 +4,9 @@ Created on Nov 6, 2013
 @author: mkiyer
 '''
 import os
-import numpy as np
 import logging
+import collections
+import numpy as np
 
 FLOAT_DTYPE = np.float32
 
@@ -16,6 +17,7 @@ class CountMatrix(object):
 class BigCountMatrix(CountMatrix):
     MEMMAP_FILE = 'counts.memmap'
     MEMMAP_T_FILE = 'counts.transpose.memmap'
+    ISOFORM_FRAC_FILE = 'isoform_frac.memmap'
     ROWNAMES_FILE = 'rownames.txt'
     COLNAMES_FILE = 'colnames.txt'
     SIZE_FACTORS_FILE = 'size_factors.txt'
@@ -26,6 +28,7 @@ class BigCountMatrix(CountMatrix):
         self.counts = None
         self.counts_t = None
         self.size_factors = None
+        self.isoform_fracs = None
     
     @property
     def shape(self):
@@ -38,6 +41,7 @@ class BigCountMatrix(CountMatrix):
         rownames_file = os.path.join(input_dir, BigCountMatrix.ROWNAMES_FILE)
         colnames_file = os.path.join(input_dir, BigCountMatrix.COLNAMES_FILE)
         size_factors_file = os.path.join(input_dir, BigCountMatrix.SIZE_FACTORS_FILE)
+        isoform_frac_file = os.path.join(input_dir, BigCountMatrix.ISOFORM_FRAC_FILE)
         self = BigCountMatrix()
         self.matrix_dir = input_dir
         with open(rownames_file, 'r') as fileh:
@@ -51,11 +55,18 @@ class BigCountMatrix(CountMatrix):
         if os.path.exists(size_factors_file):
             with open(size_factors_file, 'r') as fileh:
                 self.size_factors = np.array([float(line.strip()) for line in fileh])
+        if os.path.exists(isoform_frac_file):
+            self.isoform_fracs = np.memmap(isoform_frac_file, 
+                                           dtype=FLOAT_DTYPE, 
+                                           mode='r',
+                                           shape=(len(self.rownames), 
+                                                  len(self.colnames)))
         return self
 
     def close(self):
         del self.counts
         del self.counts_t
+        del self.isoform_fracs
         
     def copy(self, output_dir, rowsubset=None, colsubset=None):
         if (rowsubset is None) or (len(rowsubset) == 0):
@@ -73,6 +84,7 @@ class BigCountMatrix(CountMatrix):
         rownames_file = os.path.join(output_dir, BigCountMatrix.ROWNAMES_FILE)
         colnames_file = os.path.join(output_dir, BigCountMatrix.COLNAMES_FILE)        
         size_factors_file = os.path.join(output_dir, BigCountMatrix.SIZE_FACTORS_FILE)
+        isoform_frac_file = os.path.join(output_dir, BigCountMatrix.ISOFORM_FRAC_FILE)
         # write rownames and colnames
         with open(rownames_file, 'w') as fileh:
             row_inds = []
@@ -90,10 +102,6 @@ class BigCountMatrix(CountMatrix):
                     print >>fileh, colname
                     col_inds.append(ind)
                 ind += 1
-        if self.size_factors is not None:
-            with open(size_factors_file, 'w') as fileh:
-                for ind in col_inds:
-                    print >>fileh, self.size_factors[ind]
         # write rows
         fp = np.memmap(counts_file, dtype=FLOAT_DTYPE, mode='w+', 
                        shape=(len(row_inds),len(col_inds)))
@@ -106,6 +114,18 @@ class BigCountMatrix(CountMatrix):
         for j,ind in enumerate(col_inds):
             fp[j,:] = np.array(self.counts_t[ind,row_inds], dtype=np.float)
         del fp
+        # size factors
+        if self.size_factors is not None:
+            with open(size_factors_file, 'w') as fileh:
+                for ind in col_inds:
+                    print >>fileh, self.size_factors[ind]
+        # isoform fractions
+        if self.isoform_fracs is not None:
+            fp = np.memmap(isoform_frac_file, dtype=FLOAT_DTYPE, mode='w+',
+                           shape=(len(row_inds),len(col_inds)))
+            for i,ind in enumerate(row_inds):
+                fp[i,:] = np.array(self.isoform_fracs[ind,col_inds], dtype=np.float)
+            del fp
 
     @staticmethod
     def from_tsv(input_file, output_dir, na_values=None):
@@ -183,7 +203,7 @@ class BigCountMatrix(CountMatrix):
                 geomeans[i] = np.nan
             if i % 10000 == 0:
                 logging.debug("%d %d" % (i, np.isfinite(geomeans[:i]).sum()))
-        print 'found', np.isfinite(geomeans).sum()
+        #print 'found', np.isfinite(geomeans).sum()
         # ignore rows of zero or nan
         valid_geomeans = np.logical_and((geomeans > 0), np.isfinite(geomeans))
         size_factors = np.empty(ncols, dtype=np.float)
@@ -220,9 +240,38 @@ class BigCountMatrix(CountMatrix):
                 size_factors[j] = a.sum()
             size_factors = size_factors / np.median(size_factors)
         self.size_factors = size_factors
-        print 'md', self.matrix_dir
         size_factors_file = os.path.join(self.matrix_dir, BigCountMatrix.SIZE_FACTORS_FILE)
         with open(size_factors_file, 'w') as fileh:
             for x in self.size_factors:
                 print >>fileh, x
         return size_factors
+    
+    def calculate_isoform_fractions(self, isoforms_file):
+        # determine gene-transcript associations (one-to-many)
+        transcript_row_map = dict((x,i) for i,x in enumerate(self.rownames))
+        gene_row_map = collections.defaultdict(lambda: [])
+        with open(isoforms_file) as fileh:
+            for i,line in enumerate(fileh):
+                fields = line.strip().split('\t')
+                transcript_id = fields[0]
+                if transcript_id not in transcript_row_map:
+                    continue
+                gene_id = fields[1]
+                gene_row_map[gene_id].append(transcript_row_map[transcript_id])
+        # create memmap file
+        isoform_frac_file = os.path.join(self.matrix_dir, BigCountMatrix.ISOFORM_FRAC_FILE)
+        self.isoform_fracs = np.memmap(isoform_frac_file, dtype=FLOAT_DTYPE, mode='w+', 
+                                       shape=(len(self.rownames), len(self.colnames)))
+        for gene_id in sorted(gene_row_map):
+            indexes = np.array(gene_row_map[gene_id])
+            counts = np.array(self.counts[indexes,:])
+            # ignore 'nan' values by setting them to zero
+            nancounts = np.isnan(counts)
+            counts[nancounts] = 0
+            # convert from raw counts to fractions of total for gene
+            countsums = counts.sum(axis=0)
+            nzsums = countsums.nonzero()[0]
+            fracs = np.zeros_like(counts)
+            fracs[:,nzsums] = counts[:,nzsums] / countsums[nzsums]
+            fracs[nancounts] = np.nan
+            self.isoform_fracs[indexes,:] = fracs

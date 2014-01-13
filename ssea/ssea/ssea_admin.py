@@ -28,6 +28,6 @@ def main():
     parser_merge.set_default(func=merge)
     args = parser.parse_args()
     args.func(args)
-            
+
 if __name__ == '__main__':
     sys.exit(main())
