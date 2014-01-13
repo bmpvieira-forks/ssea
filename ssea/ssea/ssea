@@ -191,10 +191,13 @@ def ssea_setup(config):
     sample_set_info_file = os.path.join(config.output_dir, 
                                         Config.SAMPLE_SET_INFO_FILE)
     ss_infos = []
+    ss_names = set()
+    max_ss_id = 0
     if os.path.exists(sample_set_info_file):
-        ss_infos.extend(read_sample_set_info(sample_set_info_file))
-    ss_names = set([ss.name for ss in ss_infos])
-    max_ss_id = max(ss.id for ss in ss_infos)
+        for ss_info in read_sample_set_info(sample_set_info_file):
+            ss_infos.append(ss_info)
+            ss_names.add(ss_info.name)
+            max_ss_id = max(max_ss_id, ss_info.id)
     # read new sample sets
     for sample_set in sample_sets:
         logging.info("Sample Set: %s" % (sample_set.name))
