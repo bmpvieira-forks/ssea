@@ -6,6 +6,9 @@ Created on Oct 18, 2013
 import logging
 import json
 import itertools
+import os
+import re
+
 import numpy as np
 
 INT_DTYPE = np.int
@@ -104,6 +107,41 @@ def chunk(n, nchunks):
             break
         start = end
     assert end == n
+
+def computerize_name(s):
+    # lower case and remove trailing whitespace
+    s = s.lower().strip()
+    # replace apostrophe with nothing
+    s = s.replace("'", '')
+    # replace punctuation with underscore
+    #s = re.sub(r'[\W_]+', '', s)
+    s = re.sub(r'[\W]+', '_', s)
+    # remove leading and trailing underscores
+    s = s.strip('_')
+    return s
+
+class JobStatus:
+    DONE = 'job.done'
+    BUSY = 'job.busy'
+    READY = 'job.ready'
+    @staticmethod
+    def set(path, status):
+        status_path = os.path.join(path, status)
+        assert not os.path.exists(status_path)
+        # clear other status
+        for other_status in (JobStatus.DONE, JobStatus.BUSY, JobStatus.READY):
+            other_path = os.path.join(path, other_status)
+            if os.path.exists(other_path):
+                os.remove(other_path)
+        # set this status
+        open(status_path, 'w').close()
+    @staticmethod
+    def get(path):
+        if os.path.exists(os.path.join(path, JobStatus.DONE)):
+            return JobStatus.DONE 
+        elif os.path.exists(os.path.join(path, JobStatus.BUSY)):
+            return JobStatus.BUSY
+        return JobStatus.READY 
 
 class ParserError(Exception):
     '''Error parsing a file.'''
