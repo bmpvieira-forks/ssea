@@ -105,6 +105,25 @@ def to_json(args):
         return 1
     for ss in _parse_sample_sets(filename, sep):
         print ss.to_json()
+        
+def to_smt(args):
+    filename = args.sample_set_file
+    sep = args.sep
+    prefix = args.prefix
+    if not os.path.exists(filename):
+        logging.error("Sample set file '%s' not found" % (filename))
+        return 1
+    for ss in _parse_sample_sets(filename, sep):
+        lines = []
+        lines.append('\t'.join(['name', ss.name]))
+        lines.append('\t'.join(['desc', ss.desc]))
+        for sample in sorted(ss.value_dict):
+            lines.append('\t'.join([sample, str(ss.value_dict[sample])]))
+        suffix = computerize_name(ss.name)
+        path = prefix + '.' + suffix + '.smt'
+        with open(path, 'w') as f:
+            for line in lines:
+                print >>f, line
 
 def subset(args):
     filename = args.sample_set_file
@@ -190,6 +209,11 @@ def main():
     subparser = subparsers.add_parser('tojson')
     subparser.add_argument('sample_set_file') 
     subparser.set_defaults(func=to_json)
+    # convert to smt format
+    subparser = subparsers.add_parser('tosmt')
+    subparser.add_argument('sample_set_file') 
+    subparser.add_argument('prefix') 
+    subparser.set_defaults(func=to_smt)
     # rename
     subparser = subparsers.add_parser('rename')
     subparser.add_argument('--fromname', dest='fromname', default=None)

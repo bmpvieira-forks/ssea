@@ -8,6 +8,7 @@ import argparse
 import os
 import sys
 import glob
+from multiprocessing import Pool
 
 # local imports
 from ssea.lib.config import Config 
@@ -46,6 +47,66 @@ def parse_results(filename):
             result = Result.from_json(line.strip())
             yield result
 
+def query_worker(args):    
+    (input_path, matrix_dir, meta, fdr_threshold, 
+     frac_threshold, fpr_threshold, prec_threshold) = args
+    bm = BigCountMatrix.open(matrix_dir)
+    ss_compname = os.path.basename(input_path)
+    results_file = os.path.join(input_path, Config.RESULTS_JSON_FILE)
+    i = 0
+    sig = 0
+    lines = []
+    # extract data
+    for res in parse_results(results_file):
+        i += 1
+        #if (i % 10000) == 0:
+        #    logging.debug('%s %d results' % (ss_compname, i))
+        transcript_id = bm.rownames[res.t_id]
+        if (meta is not None) and (transcript_id not in meta):
+            continue
+        core_size = res.core_hits + res.core_misses
+        if core_size == 0:
+            prec = 0.0
+        else:
+            prec = res.core_hits / float(core_size)
+        num_misses = res.core_misses + res.null_misses
+        if num_misses == 0:
+            fpr = 0.0
+        else:
+            fpr = res.core_misses / float(num_misses)
+        if ((res.ss_fdr_q_value <= fdr_threshold) and 
+            (abs(res.ss_frac) >= frac_threshold) and
+            (fpr <= fpr_threshold) and
+            (prec >= prec_threshold)):
+            if meta is None:
+                fields = [transcript_id]
+            else:
+                fields = list(meta[transcript_id])
+            fields.extend([ss_compname, res.es, res.nes, 
+                           res.ss_fdr_q_value, res.ss_frac, fpr, prec])
+            lines.append('\t'.join(map(str,fields)))
+            sig += 1
+    bm.close()
+    logging.debug('Found %d results for path %s' % (sig, input_path))
+    return lines
+
+def query_parallel(input_paths, matrix_dir, meta, meta_header_fields, 
+                   fdr_threshold, frac_threshold, fpr_threshold, 
+                   prec_threshold, num_processes):
+    tasklist = []
+    for input_path in input_paths:
+        tasklist.append((input_path, matrix_dir, meta, fdr_threshold, 
+                         frac_threshold, fpr_threshold, prec_threshold))
+    header_fields = meta_header_fields + ['ss_compname', 'es', 'nes', 'fdr', 'frac', 'fpr', 'prec']
+    print '\t'.join(header_fields)
+    # create pool
+    pool = Pool(processes=num_processes)
+    result_iter = pool.imap_unordered(query_worker, tasklist)
+    for lines in result_iter:
+        print '\n'.join(lines)
+    pool.close()
+    pool.join()
+
 def main():
     logging.basicConfig(level=logging.DEBUG,
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -53,8 +114,10 @@ def main():
     parser.add_argument('--fdr', dest='fdr', type=float, default=1.0)
     parser.add_argument('--frac', dest='frac', type=float, default=0.0)
     parser.add_argument('--fpr', dest='fpr', type=float, default=1.0)
+    parser.add_argument('--prec', dest='prec', type=float, default=0.0)
     parser.add_argument('--meta', dest='metadata_file', default=None)
-    parser.add_argument("-i", dest="input_paths_file", default=None)
+    parser.add_argument('-p', dest='num_processes', type=int, default=1)
+    parser.add_argument('-i', dest='input_paths_file', default=None)
     parser.add_argument('matrix_dir')
     args = parser.parse_args()
     # get args
@@ -62,10 +125,11 @@ def main():
     fdr_threshold = args.fdr
     frac_threshold = args.frac
     fpr_threshold = args.fpr
+    prec_threshold = args.prec
+    num_processes = args.num_processes
     input_paths_file = args.input_paths_file
     metadata_file = args.metadata_file
     # check args
-    bm = BigCountMatrix.open(matrix_dir)
     fdr_threshold = max(0.0, min(fdr_threshold, 1.0))
     frac_threshold = max(0.0, min(frac_threshold, 1.0))
     input_paths = []
@@ -102,52 +166,12 @@ def main():
     logging.debug('SSEA results: %d' % (len(input_paths)))
     logging.debug('FDR threshold: %f' % (fdr_threshold))
     logging.debug('Frac threshold: %f' % (frac_threshold))
+    logging.debug('Prec threshold: %f' % (prec_threshold))
     logging.debug('FPR threshold: %f' % (fpr_threshold))
-    header_fields = meta_header_fields + ['ss_compname', 'es', 'nes', 'fdr', 'frac', 'fpr']
-    print '\t'.join(header_fields)
-    for input_path in input_paths:
-        logging.debug('Parsing path %s' % (input_path))
-        results_file = os.path.join(input_path, Config.RESULTS_JSON_FILE)
-        # extract data
-        ss_compname = os.path.basename(input_path)
-        i = 0
-        sig = 0
-        for res in parse_results(results_file):
-            # logging
-            i += 1
-            if (i % 10000) == 0:
-                logging.debug('Parsed %d results' % (i))
-            transcript_id = bm.rownames[res.t_id]
-            if meta is not None:
-                if transcript_id not in meta:
-                    continue
-#            core_size = res.core_hits + res.core_misses
-#            if core_size == 0:
-#                prec = 0.0
-#            else:
-#                prec = res.core_hits / float(core_size)
-            num_misses = res.core_misses + res.null_misses
-            if num_misses == 0:
-                fpr = 0.0
-            else:
-                fpr = res.core_misses / float(num_misses)
-            if ((res.ss_fdr_q_value <= fdr_threshold) and 
-                (abs(res.ss_frac) >= frac_threshold) and
-                (fpr <= fpr_threshold)):
-                if meta is None:
-                    fields = [transcript_id]
-                else:
-                    fields = list(meta[transcript_id])
-                fields.extend([ss_compname,
-                               res.es,
-                               res.nes,
-                               res.ss_fdr_q_value,
-                               res.ss_frac,
-                               fpr])
-                print '\t'.join(map(str, fields))
-                sig += 1
-        logging.debug('Found %d results for path %s' % (sig, input_path))
-    bm.close()
+    logging.debug('Num processes: %d' % (num_processes))
+    query_parallel(input_paths, matrix_dir, meta, meta_header_fields, 
+                   fdr_threshold, frac_threshold, fpr_threshold, 
+                   prec_threshold, num_processes)
 
 if __name__ == '__main__':
     sys.exit(main())
