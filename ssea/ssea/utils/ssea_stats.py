@@ -86,23 +86,25 @@ def stats_parallel(input_paths, matrix_dir, transcripts, prefix,
     sigall = [set() for x in fdr_thresholds]
     bm = BigCountMatrix.open(matrix_dir)
     nrows = len(bm.rownames)
-    header_fields = ['ss_compname', 'dir', 'fdr', 'count']
-    print '\t'.join(header_fields)
-    for ss_compname, ss_sigup, ss_sigdn in result_iter:
-        for i,fdr_threshold in enumerate(fdr_thresholds):
-            fields = [ss_compname, 'up', '%.1e' % (fdr_threshold), len(ss_sigup[i])]
-            print '\t'.join(map(str, fields))
-            fields = [ss_compname, 'dn', '%.1e' % (fdr_threshold), len(ss_sigdn[i])]
-            print '\t'.join(map(str, fields))
-            ss_sigall = ss_sigup[i].union(ss_sigdn[i])
-            fields = [ss_compname, 'both', '%.1e' % (fdr_threshold), len(ss_sigall)]
-            print '\t'.join(map(str, fields))
-            num_none = nrows - len(ss_sigall)
-            fields = [ss_compname, 'none', '%.1e' % (fdr_threshold), num_none]
-            print '\t'.join(map(str, fields))
-            sigup[i].update(ss_sigup[i])
-            sigdn[i].update(ss_sigdn[i])
-            sigall[i].update(ss_sigall)
+    filename = prefix + '.txt'
+    with open(filename, 'w') as f:
+        header_fields = ['ss_compname', 'dir', 'fdr', 'count']
+        print >>f, '\t'.join(header_fields)
+        for ss_compname, ss_sigup, ss_sigdn in result_iter:
+            for i,fdr_threshold in enumerate(fdr_thresholds):
+                fields = [ss_compname, 'up', '%.1e' % (fdr_threshold), len(ss_sigup[i])]
+                print >>f, '\t'.join(map(str, fields))
+                fields = [ss_compname, 'dn', '%.1e' % (fdr_threshold), len(ss_sigdn[i])]
+                print >>f, '\t'.join(map(str, fields))
+                ss_sigall = ss_sigup[i].union(ss_sigdn[i])
+                fields = [ss_compname, 'both', '%.1e' % (fdr_threshold), len(ss_sigall)]
+                print >>f, '\t'.join(map(str, fields))
+                num_none = nrows - len(ss_sigall)
+                fields = [ss_compname, 'none', '%.1e' % (fdr_threshold), num_none]
+                print >>f, '\t'.join(map(str, fields))
+                sigup[i].update(ss_sigup[i])
+                sigdn[i].update(ss_sigdn[i])
+                sigall[i].update(ss_sigall)
     pool.close()
     pool.join()
     # global stats
