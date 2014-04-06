@@ -69,7 +69,7 @@ $(document).ready(function() {
 <td>{{ res.sample_set_desc }}</td>
 <td>{{ res.sample_set_size }}</td>
 {% for key in params %}
-    <td>{{ res.params[key] }}</td>
+    <td>{% if res.params[key] != 'NA' %}{{ res.params[key] }}{% endif %}</td>
 {% endfor %}
 <td>{{ res.es }}</td>
 <td>{{ res.nes }}</td>

@@ -23,16 +23,20 @@ import numpy as np
 from jinja2 import Environment, PackageLoader
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.patches import Polygon
 
 # local imports
 from ssea.lib.kernel import ssea_kernel, RandomState
-from ssea.lib.base import INT_DTYPE, Result, Metadata, SampleSet
-from ssea.lib.config import Config, timestamp
+from ssea.lib.base import Result, SampleSet
+from ssea.lib.config import Config
 from ssea.lib.countdata import BigCountMatrix
 
 # setup path to web files
 import ssea
 SRC_WEB_PATH = os.path.join(ssea.__path__[0], 'web')
+
+# constants
+REPORT_DIR = 'report'
 
 # setup html template environment
 env = Environment(loader=PackageLoader("ssea", "templates"),
@@ -41,22 +45,22 @@ env = Environment(loader=PackageLoader("ssea", "templates"),
 # matplotlib static figure for plotting
 global_fig = plt.figure(0)
 
-# functions to test operator
-OP_TEST_FUNCS = {'<=': lambda a,b: a<=b,
-                 '>=': lambda a,b: a>=b,
-                 '<': lambda a,b: a<b,
-                 '>': lambda a,b: a>b}
-
-REPORT_DIR = 'report'
+class SSEAData:
+    pass
 
 class ReportConfig(object):
     def __init__(self):
         self.num_processes = 1
         self.input_dir = None
+        self.matrix_dir = None
         self.output_dir = None
-        self.thresholds = []
-        self.create_html = True
-        self.create_pdf = True
+        self.create_html = False
+        self.create_pdf = False
+        self.create_png = False
+        self.create_expr_png = False
+        self.create_expr_pdf = False
+        self.col_metadata_file = None
+        self.row_metadata_file = None
 
     def get_argument_parser(self, parser=None):
         if parser is None:
@@ -71,35 +75,46 @@ class ReportConfig(object):
         parser.add_argument('-o', '--output-dir', dest='output_dir',
                             help='Output directory [default will add '
                             '"report" directory to input folder')
+        parser.add_argument('input_dir')
+        parser.add_argument('matrix_dir')
         grp = parser.add_argument_group("SSEA Report Options")
-        grp.add_argument('--no-html', dest="create_html", 
-                         action="store_false", default=self.create_html,
-                         help='Do not create detailed html reports')
-        grp.add_argument('--no-pdf', dest="create_pdf", 
-                         action="store_false", default=self.create_pdf,
-                         help='Do not create PDF plots')
-        grp.add_argument('-t', '--threshold', action="append", 
-                         dest="thresholds",
-                         help='Significance thresholds for generating '
-                         'detailed reports [default=%(default)s]')
+        grp.add_argument('--html', dest="create_html", 
+                         action="store_true", default=self.create_html,
+                         help='Create detailed html reports')
+        grp.add_argument('--pdf', dest="create_pdf", 
+                         action="store_true", default=self.create_pdf,
+                         help='Create PDF plots')
+        grp.add_argument('--png', dest="create_png", 
+                         action="store_true", default=self.create_png,
+                         help='Create PNG plots')
+        grp.add_argument('--exprpdf', dest="create_expr_pdf", 
+                         action="store_true", default=self.create_expr_pdf,
+                         help='Create expression PDF plots')
+        grp.add_argument('--exprpng', dest="create_expr_png", 
+                         action="store_true", default=self.create_expr_png,
+                         help='Create expression PNG plots')
         grp.add_argument('--colmeta', dest='col_metadata_file',
                          help='file containing metadata corresponding to each '
                          'column of the weight matrix file')
         grp.add_argument('--rowmeta', dest='row_metadata_file',
                          help='file containing metadata corresponding to each '
                          'row of the weight matrix file')
-        grp.add_argument('input_dir')
         return parser        
 
     def log(self, log_func=logging.info):
         log_func("Parameters")
         log_func("----------------------------------")
-        log_func("num processes:           %d" % (self.num_processes))
-        log_func("input directory:         %s" % (self.input_dir))
-        log_func("output directory:        %s" % (self.output_dir))
-        log_func("create html report:      %s" % (self.create_html))
-        log_func("create pdf plots:        %s" % (self.create_pdf))
-        log_func("thresholds:              %s" % (','.join(''.join(map(str,t)) for t in self.thresholds)))
+        log_func("num processes:               %d" % (self.num_processes))
+        log_func("input directory:             %s" % (self.input_dir))
+        log_func("matrix directory:            %s" % (self.matrix_dir))
+        log_func("output directory:            %s" % (self.output_dir))
+        log_func("create html report:          %s" % (self.create_html))
+        log_func("create pdf plots:            %s" % (self.create_pdf))
+        log_func("create png plots:            %s" % (self.create_png))
+        log_func("create expression pdf plots: %s" % (self.create_expr_pdf))
+        log_func("create expression png plots: %s" % (self.create_expr_png))
+        log_func("col metadata file:           %s" % (self.col_metadata_file))
+        log_func("row metadata file:           %s" % (self.row_metadata_file))
         log_func("----------------------------------")
 
     @staticmethod
@@ -119,25 +134,18 @@ class ReportConfig(object):
         # process and check arguments
         self.create_html = args.create_html
         self.create_pdf = args.create_pdf
+        self.create_png = args.create_png
+        self.create_expr_pdf = args.create_expr_pdf
+        self.create_expr_png = args.create_expr_png
         self.num_processes = args.num_processes
-        # parse threshold arguments of the form 'attribute,value'
-        # for example: nominal_p_value,0.05
-        if args.thresholds is not None:
-            for arg in args.thresholds:
-                m = re.match(r'(.+)([<>]=?)(.+)', arg)
-                if m is None:
-                    parser.error('error parsing threshold argument "%s"' % (arg))
-                attr, op, value = m.groups()
-                if attr not in Result.FIELDS:
-                    parser.error('threshold attribute "%s" unknown' % (attr))
-                if op not in OP_TEST_FUNCS:
-                    parser.error('unrecognized operator "%s"' % (op))
-                value = float(value)
-                self.thresholds.append((attr,op,value))       
         # check input directory
         if not os.path.exists(args.input_dir):
             parser.error("input directory '%s' not found" % (args.input_dir))
         self.input_dir = args.input_dir
+        # check matrix directory
+        if not os.path.exists(args.matrix_dir):
+            parser.error("matrix directory '%s' not found" % (args.matrix_dir))
+        self.matrix_dir = args.matrix_dir        
         # setup output directory
         if args.output_dir is None:
             self.output_dir = os.path.join(self.input_dir, REPORT_DIR)
@@ -160,29 +168,36 @@ class ReportConfig(object):
             self.row_metadata_file = None
         return self
 
-class SSEAData:
-    def get_details_table(self, sample_metadata):
-        # show details of hits
-        rows = [['index', 'sample', 'rank', 'raw_weights', 'transformed_weights',
-                 'running_es', 'core_enrichment']]
-        for i,ind in enumerate(self.hit_indexes):
-            if self.es < 0:
-                is_enriched = int(ind >= self.es_rank)
-            else:                
-                is_enriched = int(ind <= self.es_rank)
-            meta = sample_metadata[self.sample_inds[ind]]
-            rows.append([i, meta.name, ind+1, self.raw_weights[ind],
-                         self.weights_hit[ind], self.es_run[ind], 
-                         is_enriched])
-        return rows
+def parse_metadata(filename, names):
+    d = {}
+    with open(filename) as f:
+        header_fields = f.next().strip().split('\t')
+        for line in f:
+            fields = line.strip().split('\t')
+            d[fields[0]] = dict(zip(header_fields, fields))
+    m = {}
+    for i,name in enumerate(names):
+        if name in d:
+            m[i] = d[name]
+    return m
 
-def ssea_rerun(result, bm, sample_set, row_metadata, col_metadata, 
-               reportconfig, sseaconfig):
+def get_library_sizes(bm):
+    # get total counts per library
+    logging.debug('Getting total counts per library')
+    lib_sizes = np.empty(bm.shape[1], dtype=np.float)
+    for j in xrange(bm.shape[1]):
+        a = bm.counts_t[j,:]
+        a = a[np.isfinite(a)]
+        lib_sizes[j] = a.sum()
+    lib_sizes /= 1.0e6
+    return lib_sizes
+
+def ssea_rerun(t_id, rand_seed, bm, ssea_config, sample_set):
     # get membership array for sample set
     membership = sample_set.get_array(bm.colnames)
     valid_samples = (membership >= 0)
     # read from memmap
-    counts = np.array(bm.counts[result.t_id,:], dtype=np.float)
+    counts = np.array(bm.counts[t_id,:], dtype=np.float)
     # remove 'nan' values
     valid_inds = np.logical_and(valid_samples, np.isfinite(counts))
     # subset counts, size_factors, and membership array
@@ -190,22 +205,24 @@ def ssea_rerun(result, bm, sample_set, row_metadata, col_metadata,
     size_factors = bm.size_factors[valid_inds]
     membership = membership[valid_inds]
     # reproduce previous run
-    rng = RandomState(result.rand_seed)
+    rng = RandomState(rand_seed)
     (ranks, norm_counts, norm_counts_miss, norm_counts_hit, 
      es_val, es_rank, es_run) = \
         ssea_kernel(counts, size_factors, membership, rng,
                     resample_counts=False,
                     permute_samples=False,
                     add_noise=True,
-                    noise_loc=sseaconfig.noise_loc, 
-                    noise_scale=sseaconfig.noise_scale,
-                    method_miss=sseaconfig.weight_miss,
-                    method_hit=sseaconfig.weight_hit,
-                    method_param=sseaconfig.weight_param)
+                    noise_loc=ssea_config.noise_loc, 
+                    noise_scale=ssea_config.noise_scale,
+                    method_miss=ssea_config.weight_miss,
+                    method_hit=ssea_config.weight_hit,
+                    method_param=ssea_config.weight_param)    
     # make object for plotting
     m = membership[ranks]
     hit_indexes = (m > 0).nonzero()[0]
     d = SSEAData()
+    d.counts = counts
+    d.membership = m
     d.es = es_val
     d.es_rank = es_rank
     d.es_run = es_run
@@ -217,8 +234,7 @@ def ssea_rerun(result, bm, sample_set, row_metadata, col_metadata,
     d.weights_hit = norm_counts_hit[ranks]
     return d
 
-def plot_enrichment(result, sseadata,
-                    title, fig=None):
+def plot_enrichment(result, sseadata, title, fig=None):
     if fig is None:
         fig = plt.Figure()
     else:
@@ -249,10 +265,11 @@ def plot_enrichment(result, sseadata,
     frame.set_linewidth(0)
     # membership in sample set
     ax1 = fig.add_subplot(gs[1])
-    if len(sseadata.hit_indexes) > 0:
-        ax1.vlines(sseadata.hit_indexes, ymin=0, ymax=1, lw=0.25, 
-                   color='black', label='Hits')
-    ax1.set_xlim((0, len(sseadata.es_run)))
+    ax1.bar(np.arange(len(sseadata.membership)), sseadata.membership, width=1, linewidth=0, color='black')
+    #if len(sseadata.hit_indexes) > 0:
+    #    ax1.vlines(sseadata.hit_indexes, ymin=0, ymax=1, lw=0.5, 
+    #               color='black', label='Hits')
+    ax1.set_xlim((0, len(sseadata.membership)))
     ax1.set_ylim((0, 1))
     ax1.set_xticks([])
     ax1.set_yticks([])
@@ -272,118 +289,203 @@ def plot_enrichment(result, sseadata,
     #fig.tight_layout()
     return fig
 
-def create_detailed_report(result, sseadata, rowmeta, colmeta, sample_set, 
-                           reportconfig):
-    '''
-    Generate detailed report files including enrichment plots and 
-    a tab-delimited text file showing the running ES score and rank
-    of each member in the sample set
-     
-    returns dict containing files written
-    '''    
-    d = {}
+def plot_expression(t_id, transcript_length, lib_sizes, sample_set, bm, title, fig):
+    # get membership array for sample set
+    membership = sample_set.get_array(bm.colnames)
+    valid_samples = (membership >= 0)
+    # read from memmap
+    counts = np.array(bm.counts[t_id,:], dtype=np.float)
+    # remove 'nan' values
+    valid_inds = np.logical_and(valid_samples, np.isfinite(counts))
+    # subset counts, size_factors, and membership array
+    counts = counts[valid_inds]
+    lib_sizes = lib_sizes[valid_inds]
+    membership = membership[valid_inds]
+    # normalize
+    fpkm = (counts / lib_sizes) / (transcript_length / 1000.0)
+    # subset into hits/misses
+    fpkm_hits = fpkm[membership == 1]
+    fpkm_misses = fpkm[membership == 0]
+    data = [fpkm_hits, fpkm_misses]
+    # plot
+    if fig is None:
+        fig = plt.Figure()
+    else:
+        fig.clf()
+    gs = gridspec.GridSpec(1, 1, height_ratios=[1])
+    # only one subplot
+    ax0 = fig.add_subplot(gs[0])
+    # draw boxplot
+    bp = ax0.boxplot(data, notch=0, sym='+', vert=1, whis=1.5)
+    # change colors
+    plt.setp(bp['boxes'], color='black')
+    plt.setp(bp['whiskers'], color='black')
+    plt.setp(bp['fliers'], color='red', marker='+')
+    # Add a horizontal grid to the plot, but make it very light in color
+    # so we can use it for reading data values but not be distracting
+    ax0.yaxis.grid(True, linestyle='-', which='major', color='lightgrey',
+                   alpha=0.5)
+    # Hide these grid behind plot objects
+    ax0.set_axisbelow(True)
+    ax0.set_title(title)
+    ax0.set_xlabel('Sample Set: %s' % (sample_set.name))
+    ax0.set_ylabel('FPKM')
+    # Now fill the boxes with desired colors
+    boxColors = ['red', 'royalblue']
+    medians = range(len(data))
+    means = range(len(data))
+    for i in range(len(data)):
+        box = bp['boxes'][i]
+        boxX = []
+        boxY = []
+        for j in range(5):
+            boxX.append(box.get_xdata()[j])
+            boxY.append(box.get_ydata()[j])
+        boxCoords = zip(boxX,boxY)
+        # Alternate between Dark Khaki and Royal Blue
+        k = i % 2
+        boxPolygon = Polygon(boxCoords, facecolor=boxColors[k])
+        ax0.add_patch(boxPolygon)
+        # Now draw the median lines back over what we just filled in
+        med = bp['medians'][i]
+        medianX = []
+        medianY = []
+        for j in range(2):
+            medianX.append(med.get_xdata()[j])
+            medianY.append(med.get_ydata()[j])
+            plt.plot(medianX, medianY, 'k')
+            medians[i] = medianY[0]
+        # Finally, overplot the sample averages, with horizontal alignment
+        # in the center of each box
+        means[i] = np.average(data[i])
+        ax0.plot([np.average(med.get_xdata())], [means[i]],
+                 color='w', marker='*', markeredgecolor='k')
+
+    # Set the axes ranges and axes labels
+    bottom = -1.0
+    top = 1.1*fpkm.max()
+    ax0.set_xlim(0.5, len(data)+0.5)
+    ax0.set_ylim(bottom, top)
+    xtickNames = plt.setp(ax0, xticklabels=('Hits', 'Misses'))
+    plt.setp(xtickNames, rotation=90, fontsize=8)
+
+    # Due to the Y-axis scale being different across samples, it can be
+    # hard to compare differences in medians across the samples. Add upper
+    # X-axis tick labels with the sample means to aid in comparison
+    # (just use two decimal places of precision)
+    pos = np.arange(len(data))+1
+    upperLabels = [str(np.round(s, 2)) for s in means]
+    weights = ['semibold', 'semibold']
+    for tick,label in zip(range(len(data)),ax0.get_xticklabels()):
+        k = tick % 2
+        ax0.text(pos[tick], top-(top*0.05), upperLabels[tick], 
+                 horizontalalignment='center', size='x-small', 
+                 weight=weights[k], color=boxColors[k])
+    return fig
+
+def create_report(result, bm, lib_sizes, config, row_metadata, col_metadata, 
+                  ssea_config, sample_set):
+    filedict = {}
+    # rerun ssea
+    ssea_data = ssea_rerun(result.t_id, result.rand_seed, bm, ssea_config, sample_set)
+    rowmeta = row_metadata[result.t_id]
     # enrichment plot
-    title = 'Enrichment plot: %s vs. %s' % (rowmeta.name, sample_set.name)
-    fig = plot_enrichment(result, sseadata, 
-                          title=title, 
-                          fig=global_fig)
-    eplot_png = '%s.eplot.png' % (rowmeta.name)
-    fig.savefig(os.path.join(reportconfig.output_dir, eplot_png))
-    d['eplot_png'] = eplot_png
-    if reportconfig.create_pdf:    
-        eplot_pdf = '%s.eplot.pdf' % (rowmeta.name)
-        fig.savefig(os.path.join(reportconfig.output_dir, eplot_pdf))
-        d['eplot_pdf'] = eplot_pdf
-    # write tab-delimited details file
-    details_rows = sseadata.get_details_table(colmeta)
-    details_tsv = '%s.tsv' % (rowmeta.name)
-    fp = open(os.path.join(reportconfig.output_dir, details_tsv), 'w')
-    for row in details_rows:
-        print >>fp, '\t'.join(map(str,row))
-    fp.close()
-    d['tsv'] = details_tsv
-    # render to html
-    if reportconfig.create_html:
-        details_html = '%s.html' % (rowmeta.name)
-        t = env.get_template('details.html')
-        fp = open(os.path.join(reportconfig.output_dir, details_html), 'w')
-        print >>fp, t.render(result=result,
-                             sseadata=sseadata,
-                             details=details_rows,
-                             files=d,
-                             rowmeta=rowmeta,
-                             sample_set=sample_set)
-        fp.close()
-        d['html'] = details_html
-    return d
+    create_enrichment_plot = config.create_pdf or config.create_png
+    if create_enrichment_plot:
+        rowmeta = row_metadata[result.t_id]
+        title = 'Enrichment plot: %s vs. %s' % (rowmeta['transcript_id'], sample_set.name)
+        fig = plot_enrichment(result, ssea_data, 
+                              title=title, 
+                              fig=global_fig)
+        if config.create_png:
+            eplot_png = '%s.eplot.png' % (rowmeta['transcript_id'])
+            fig.savefig(os.path.join(config.output_dir, eplot_png))
+            filedict['eplot_png'] = eplot_png
+        if config.create_pdf:
+            eplot_pdf = '%s.eplot.pdf' % (rowmeta['transcript_id'])
+            fig.savefig(os.path.join(config.output_dir, eplot_pdf))
+            filedict['eplot_pdf'] = eplot_pdf
+    # expression plot
+    create_expr_plot = config.create_expr_pdf or config.create_expr_png
+    if create_expr_plot:    
+        transcript_length = int(rowmeta['transcript_length'])
+        title = 'Expression plot: %s' % (rowmeta['transcript_id'])
+        fig = plot_expression(result.t_id, transcript_length, 
+                              lib_sizes, sample_set, bm, 
+                              title=title, fig=global_fig)
+        if config.create_expr_png:
+            exprplot_png = '%s.fpkm.png' % (rowmeta['transcript_id'])
+            fig.savefig(os.path.join(config.output_dir, exprplot_png))
+            filedict['exprplot_png'] = exprplot_png
+        if config.create_expr_pdf:
+            exprplot_pdf = '%s.fpkm.pdf' % (rowmeta['transcript_id'])
+            fig.savefig(os.path.join(config.output_dir, exprplot_pdf))
+            filedict['exprplot_pdf'] = exprplot_pdf
+    # details of individual samples
+    create_details = config.create_html
+    if create_details:
+        # show details of hits
+        rows = [['index', 'sample', 'rank', 'raw_weights', 'transformed_weights',
+                 'running_es', 'core_enrichment']]
+        for i,ind in enumerate(ssea_data.hit_indexes):
+            if ssea_data.es < 0:
+                is_enriched = int(ind >= ssea_data.es_rank)
+            else:                
+                is_enriched = int(ind <= ssea_data.es_rank)
+            colmeta = col_metadata[ssea_data.sample_inds[ind]]
+            rows.append([i, colmeta['library_id'], ind+1, 
+                         ssea_data.raw_weights[ind],
+                         ssea_data.weights_hit[ind], 
+                         ssea_data.es_run[ind], 
+                         is_enriched])
+        # write details to file
+        details_tsv = '%s.tsv' % (rowmeta['transcript_id'])
+        with open(os.path.join(config.output_dir, details_tsv), 'w') as fp:
+            for row in rows:
+                print >>fp, '\t'.join(map(str,row))
+        filedict['tsv'] = details_tsv
+        # render to html
+        if config.create_html:
+            details_html = '%s.html' % (rowmeta['transcript_id'])
+            t = env.get_template('details.html')
+            with open(os.path.join(config.output_dir, details_html), 'w') as fp:
+                print >>fp, t.render(result=result,
+                                     sseadata=ssea_data,
+                                     details=rows,
+                                     files=filedict,
+                                     rowmeta=rowmeta,
+                                     sample_set=sample_set)
+            filedict['html'] = details_html
+    return filedict
 
-def report_serial(output_file, row_metadata, col_metadata, sample_set, 
-                  sseaconfig, reportconfig):
-    # open data matrix
-    bm = BigCountMatrix.open(sseaconfig.matrix_dir)
-    fout = open(output_file, 'w')
-    # parse report json    
-    logging.info("Processing results")
-    json_file = os.path.join(reportconfig.input_dir, Config.RESULTS_JSON_FILE)
-    for result in parse_and_filter_results(json_file, reportconfig.thresholds):
-        # rerun ssea
-        sseadata = ssea_rerun(result, bm, sample_set, row_metadata, 
-                              col_metadata, reportconfig, sseaconfig)
-        d = create_detailed_report(result, sseadata, 
-                                   row_metadata[result.t_id], col_metadata, 
-                                   sample_set, reportconfig)
-        # update results with location of plot files
-        result.files = d
-        # write result to tab-delimited text
-        print >>fout, result.to_json()
-    fout.close()
-
-def parse_and_filter_results(filename, thresholds):
-    passed = 0
-    failed = 0    
-    with open(filename, 'r') as fin:
-        for line in fin:
-            # load json document (one per line)
-            result = Result.from_json(line.strip())      
-            # apply thresholds
-            skip = False
-            for attr,op,threshold in thresholds:
-                value = getattr(result, attr)
-                if not OP_TEST_FUNCS[op](value, threshold):
-                    skip = True
-                    break
-            if skip:
-                failed += 1
-                continue
-            passed += 1
-            yield result
-    logging.info("Parsed %d results, %d passed and %d failed" %
-                 (passed+failed, passed, failed))
-
-def _producer_process(input_queue, filename, config):
-    for result in parse_and_filter_results(filename, config.thresholds):
-        input_queue.put(result)
+def _producer_process(input_queue, filename, t_ids, num_processes):
+    def parse_results(filename):
+        with open(filename, 'r') as fp:
+            for line in fp:
+                result = Result.from_json(line.strip())
+                yield result
+    for result in parse_results(filename):
+        if result.t_id in t_ids:
+            input_queue.put(result)
     # tell consumers to stop
-    for i in xrange(config.num_processes):
+    for i in xrange(num_processes):
         input_queue.put(None)
     logging.debug("Producer finished")
 
-def _worker_process(input_queue, output_queue, sample_set, row_metadata, 
-                    col_metadata, sseaconfig, reportconfig):
+def _worker_process(input_queue, output_queue, config, row_metadata, 
+                    col_metadata, ssea_config, sample_set): 
     # open data matrix
-    bm = BigCountMatrix.open(sseaconfig.matrix_dir)
+    bm = BigCountMatrix.open(config.matrix_dir)
+    logging.debug('Getting total fragments per library')
+    lib_sizes = get_library_sizes(bm)    
     # process results
     while True:
         result = input_queue.get()
         if result is None:
             break
-        # rerun ssea
-        sseadata = ssea_rerun(result, bm, sample_set, row_metadata, 
-                              col_metadata, reportconfig, sseaconfig)
-        d = create_detailed_report(result, sseadata, 
-                                   row_metadata[result.t_id], col_metadata, 
-                                   sample_set, reportconfig)
-        # update results with location of plot files
+        d = create_report(result, bm, lib_sizes, config, row_metadata, col_metadata, 
+                          ssea_config, sample_set)
+        # update result with location of files
         result.files = d
         # send result back
         output_queue.put(result)
@@ -391,43 +493,6 @@ def _worker_process(input_queue, output_queue, sample_set, row_metadata,
     # send done signal
     output_queue.put(None)
     logging.debug("Worker finished")
-
-def report_parallel(output_file, row_metadata, col_metadata, 
-                    sample_set, runconfig, config):
-    # create multiprocessing queues for passing data
-    input_queue = Queue(maxsize=config.num_processes*3)
-    output_queue = Queue(maxsize=config.num_processes*3)    
-    # start a producer process
-    logging.debug("Starting producer process and %d workers" % (config.num_processes))
-    json_file = os.path.join(config.input_dir, Config.RESULTS_JSON_FILE)
-    args=(input_queue, json_file, config)
-    producer = Process(target=_producer_process, args=args)
-    producer.start()
-    # start consumer processes
-    procs = []
-    for i in xrange(config.num_processes):
-        args = (input_queue, output_queue, sample_set, row_metadata, 
-                col_metadata, runconfig, config)
-        p = Process(target=_worker_process, args=args)
-        p.start()
-        procs.append(p)
-    # get results from consumers
-    num_alive = config.num_processes
-    with open(output_file, 'w') as fout:
-        while num_alive > 0:
-            result = output_queue.get()
-            if result is None:
-                num_alive -= 1
-                logging.debug("Main process detected worker finished, %d still alive" % (num_alive))
-            else:
-                # write result to tab-delimited text
-                print >>fout, result.to_json()
-    logging.debug("Joining all processes")
-    # wait for producer to finish
-    producer.join()
-    # wait for consumers to finish
-    for p in procs:
-        p.join()
 
 def create_html_report(input_file, output_file, row_metadata, sample_set):
     def _result_parser(filename):
@@ -438,13 +503,14 @@ def create_html_report(input_file, output_file, row_metadata, sample_set):
                 result.sample_set_name = sample_set.name
                 result.sample_set_desc = sample_set.desc
                 result.sample_set_size = len(sample_set)
-                result.name = rowmeta.name
-                result.params = rowmeta.params
+                result.name = rowmeta['transcript_id']
+                result.params = dict(rowmeta)
+                del result.params['transcript_id']
                 yield result
     # get full list of parameters in row metadata
     allparams = set()
-    for r in row_metadata:
-        allparams.update(r.params.keys())
+    for v in row_metadata.itervalues():
+        allparams.update(v)
     allparams = sorted(allparams)
     # render templates
     t = env.get_template('report.html')
@@ -453,58 +519,83 @@ def create_html_report(input_file, output_file, row_metadata, sample_set):
                              params=allparams,
                              results=_result_parser(input_file))
 
-def report(reportconfig):
+def report(config):
     # create output dir
-    if not os.path.exists(reportconfig.output_dir):
-        logging.debug("Creating output dir '%s'" % (reportconfig.output_dir))
-        os.makedirs(reportconfig.output_dir)
+    if not os.path.exists(config.output_dir):
+        logging.debug("Creating output dir '%s'" % (config.output_dir))
+        os.makedirs(config.output_dir)
     # create directory for static web files (CSS, javascript, etc)
-    if reportconfig.create_html:
-        web_dir = os.path.join(reportconfig.output_dir, 'web')
+    if config.create_html:
+        web_dir = os.path.join(config.output_dir, 'web')
         if not os.path.exists(web_dir):
             logging.debug("Installing web files")
             shutil.copytree(SRC_WEB_PATH, web_dir)
-    # link to input files
-    sample_set_json_file = os.path.join(reportconfig.input_dir,
-                                        Config.SAMPLE_SET_JSON_FILE)
-    sample_set = SampleSet.parse_json(sample_set_json_file)
-    config_json_file = os.path.join(reportconfig.input_dir, 
-                                    Config.CONFIG_JSON_FILE)
-    sseaconfig = Config.parse_json(config_json_file)
+    # open expression matrix to read metadata
+    bm = BigCountMatrix.open(config.matrix_dir)
     # read metadata
-    bm = BigCountMatrix.open(sseaconfig.matrix_dir)
-    if reportconfig.row_metadata_file is not None:
+    if config.row_metadata_file is not None:
         logging.info("Reading row metadata")
-        row_metadata = list(Metadata.parse_tsv(reportconfig.row_metadata_file, bm.rownames))
+        row_metadata = parse_metadata(config.row_metadata_file, bm.rownames)
     else:
-        id_iter = itertools.count()
-        row_metadata = [Metadata(id_iter.next(), x) for x in bm.rownames]
-    if reportconfig.col_metadata_file is not None:
+        row_metadata = dict((i,{'transcript_id': x}) for i,x in enumerate(bm.rownames))
+    if config.col_metadata_file is not None:
         logging.info("Reading column metadata")
-        col_metadata = list(Metadata.parse_tsv(reportconfig.col_metadata_file, bm.colnames))
+        col_metadata = parse_metadata(config.col_metadata_file, bm.colnames)
     else:
-        id_iter = itertools.count()
-        col_metadata = [Metadata(id_iter.next(), x) for x in bm.colnames]    
+        col_metadata = dict((i,{'library_id': x}) for i,x in enumerate(bm.colnames))
     bm.close()
-    # write filtered results to output file
-    filtered_results_file = os.path.join(reportconfig.output_dir, 
-                                         'filtered_results.json')
     # produce detailed reports
-    if reportconfig.num_processes > 1:
-        logging.debug("Creating detailed reports in parallel with %d processes" % (reportconfig.num_processes))
-        report_parallel(filtered_results_file, row_metadata, col_metadata, 
-                        sample_set, sseaconfig, reportconfig)
-    else:
-        logging.debug("Creating detailed reports in serial")
-        report_serial(filtered_results_file, row_metadata, col_metadata, 
-                      sample_set, sseaconfig, reportconfig)
+    logging.info("Creating detailed reports with %d processes" % (config.num_processes))
+    sample_set_json_file = os.path.join(config.input_dir,
+                                        Config.SAMPLE_SET_JSON_FILE)
+    sample_set = SampleSet.parse_json(sample_set_json_file)[0]
+    ssea_config_json_file = os.path.join(config.input_dir, 
+                                         Config.CONFIG_JSON_FILE)
+    ssea_config = Config.parse_json(ssea_config_json_file)
+    results_json_file = os.path.join(config.input_dir, Config.RESULTS_JSON_FILE)
+    report_json_file = os.path.join(config.output_dir, 'report.json')
+    # create multiprocessing queues for passing data
+    input_queue = Queue(maxsize=config.num_processes*3)
+    output_queue = Queue(maxsize=config.num_processes*3)    
+    # start a producer process
+    logging.debug("Starting producer process and %d workers" % (config.num_processes))
+    args = (input_queue, results_json_file, set(row_metadata.keys()), 
+            config.num_processes)
+    producer = Process(target=_producer_process, args=args)
+    producer.start()
+    # start consumer processes
+    procs = []
+    for i in xrange(config.num_processes):
+        args = (input_queue, output_queue, config, row_metadata, 
+                col_metadata, ssea_config, sample_set)
+        p = Process(target=_worker_process, args=args)
+        p.start()
+        procs.append(p)
+    fp = open(report_json_file, 'w')
+    # get results from consumers
+    num_alive = config.num_processes
+    while num_alive > 0:
+        result = output_queue.get()
+        if result is None:
+            num_alive -= 1
+            logging.debug("Main process detected worker finished, %d still alive" % (num_alive))
+            continue
+        # write result to tab-delimited text
+        print >>fp, result.to_json()
+    logging.debug("Joining all processes")
+    # wait for producer to finish
+    producer.join()
+    # wait for consumers to finish
+    for p in procs:
+        p.join()
+    fp.close()
     # produce report
-    if reportconfig.create_html:
-        logging.debug("Writing HTML report")
-        html_file = os.path.join(reportconfig.output_dir, 'filtered_results.html')
-        create_html_report(filtered_results_file, html_file,
+    if config.create_html:
+        logging.info("Writing HTML report")
+        html_file = os.path.join(config.output_dir, 'report.html')
+        create_html_report(report_json_file, html_file,
                            row_metadata, sample_set)
-    logging.debug("Done.")
+    logging.info("Done.")
     return 0
 
 def main(argv=None):
@@ -515,5 +606,3 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

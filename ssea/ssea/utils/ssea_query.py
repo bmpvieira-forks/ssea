@@ -15,6 +15,49 @@ from ssea.lib.config import Config
 from ssea.lib.countdata import BigCountMatrix
 from ssea.lib.base import Result, JobStatus
 
+# # functions to test operator
+# OP_TEST_FUNCS = {'<=': lambda a,b: a<=b,
+#                  '>=': lambda a,b: a>=b,
+#                  '<': lambda a,b: a<b,
+#                  '>': lambda a,b: a>b}
+#         # parse threshold arguments of the form 'attribute,value'
+#         # for example: nominal_p_value,0.05
+#         if args.thresholds is not None:
+#             for arg in args.thresholds:
+#                 m = re.match(r'(.+)([<>]=?)(.+)', arg)
+#                 if m is None:
+#                     parser.error('error parsing threshold argument "%s"' % (arg))
+#                 attr, op, value = m.groups()
+#                 if attr not in Result.FIELDS:
+#                     parser.error('threshold attribute "%s" unknown' % (attr))
+#                 if op not in OP_TEST_FUNCS:
+#                     parser.error('unrecognized operator "%s"' % (op))
+#                 value = float(value)
+#                 self.thresholds.append((attr,op,value))       
+#             
+# def parse_and_filter_results(filename, thresholds):
+#     passed = 0
+#     failed = 0    
+#     with open(filename, 'r') as fin:
+#         for line in fin:
+#             # load json document (one per line)
+#             result = Result.from_json(line.strip())      
+#             # apply thresholds
+#             skip = False
+#             for attr,op,threshold in thresholds:
+#                 value = getattr(result, attr)
+#                 if not OP_TEST_FUNCS[op](value, threshold):
+#                     skip = True
+#                     break
+#             if skip:
+#                 failed += 1
+#                 continue
+#             passed += 1
+#             yield result
+#     logging.info("Parsed %d results, %d passed and %d failed" %
+#                  (passed+failed, passed, failed))
+    
+    
 def check_path(path):
     if not os.path.exists(path):
         logging.error('Directory not found at path "%s"' % (path))

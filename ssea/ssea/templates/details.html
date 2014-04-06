@@ -1,7 +1,7 @@
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN">
 <html lang="en">
 <head>
-	<title>Details for enrichment of {{ rowmeta.name }} on sample set {{ sample_set.name }}</title>
+	<title>Details for enrichment of {{ rowmeta.transcript_id }} on sample set {{ sample_set.name }}</title>
 
 	<link rel="stylesheet" href="web/gridtable.css" type="text/css" media="print, projection, screen" />
 </head>
@@ -9,17 +9,16 @@
 <body>
 
 <h1>SSEA Detailed Report</h1>
-<h2>Enrichment of {{ rowmeta.name }} on sample set {{ sample_set.name }}</h2>
+<h2>Enrichment of {{ rowmeta.transcript_id }} on sample set {{ sample_set.name }}</h2>
+
 <br/>
+
 <table class="gridtable">
 <thead>
 <tr><th>Parameter</th><th>Value</th></tr>
 </thead>
 <tbody>
-<tr><td>Name</td><td>{{ rowmeta.name }}</td></tr>
-{% for key,value in rowmeta.params|dictsort %}
-    <tr><td>Metadata: {{ key }}</td><td>{{ value }}</td></tr>
-{% endfor %}
+<tr><td>Name</td><td>{{ rowmeta.transcript_id }}</td></tr>
 <tr><td>Sample set name</td><td>{{ sample_set.name }}</td></tr>
 <tr><td>Sample set description</td><td>{{ sample_set.desc }}</td></tr>
 <tr><td>Sample set size</td><td>{{ sample_set.sample_ids|length }}</td></tr>
@@ -39,10 +38,10 @@
 </tbody>
 </table>
 
-<br/><br/>
+<br/>
 
 {% if 'eplot_png' in files %}
-<img name="enplot_{{ rowmeta.name }}_vs_{{ sample_set.name }}" src="{{ files.eplot_png }}"/>
+<img name="enplot_{{ rowmeta.transcript_id }}_vs_{{ sample_set.name }}" src="{{ files.eplot_png }}"/>
 <br/>
 Fig 1: Enrichment plot for {{ sample_set.name }}
 <br/>
@@ -53,9 +52,37 @@ No enrichment plot available
 {% endif %}
 
 {% if 'eplot_pdf' in files %}
-<a href="{{ files.eplot_pdf }}">Download PDF</a>
+<a href="{{ files.eplot_pdf }}">Download Enrichment Plot PDF</a>
 {% endif %}
-<br/><br/>
+
+<br/>
+
+{% if 'exprplot_png' in files %}
+<img name="exprplot_{{ rowmeta.transcript_id }}_vs_{{ sample_set.name }}" src="{{ files.exprplot_png }}"/>
+<br/>
+Fig 2: Expression plot for {{ sample_set.name }}
+<br/>
+{% else %}
+No expression plot available
+{% endif %}
+{% if 'exprplot_pdf' in files %}
+<a href="{{ files.exprplot_pdf }}">Download Expression Plot PDF</a>
+{% endif %}
+
+<br/>
+
+<table class="gridtable">
+<thead>
+<tr><th>Metadata Parameter</th><th>Value</th></tr>
+</thead>
+<tbody>
+{% for key,value in rowmeta|dictsort %}
+    <tr><td>Metadata: {{ key }}</td><td>{{ value }}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+
+<br/>
 
 Detailed results
 <br/>

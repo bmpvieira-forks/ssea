@@ -25,6 +25,8 @@ def _parse_sample_sets(filename, sep):
     elif ext == '.json':
         for ss in SampleSet.parse_json(filename):
             yield ss
+    else:
+        logging.error('suffix not recognized (.smx, .smt, or .json)')
 
 def info(args):
     filename = args.sample_set_file
@@ -49,6 +51,37 @@ def info(args):
             tot += 1
         print '\t'.join(map(str, [computerize_name(ss.name), ss.name, ss.desc, tot, hits, misses, nas]))
         #print 'Name: %s Description: %s Samples: %d Hits: %d Misses: %d NAs: %d' % (ss.name, ss.desc, tot, hits, misses, nas)  
+
+def getcohort(args):
+    filename = args.sample_set_file
+    sep = args.sep
+    samples = set()
+    for ss in _parse_sample_sets(filename, sep):
+        for k,v in ss.value_dict.iteritems():
+            if v != 1 and v != 0:
+                continue
+            samples.add(k)
+    for sample in sorted(samples):
+        print sample
+
+def newcohort(args):
+    sample_set_file = args.sample_set_file
+    cohort_file = args.cohort_file
+    sep = args.sep
+    cohort_samples = set(line.strip() for line in open(cohort_file))
+    for ss in _parse_sample_sets(sample_set_file, sep):
+        new_value_dict = {}
+        hits = 0
+        for k,v in ss.value_dict.iteritems(): 
+            if k in cohort_samples:
+                if v == 1:
+                    hits += 1
+                new_value_dict[k] = v
+        if hits > 0:
+            ss = SampleSet(ss.name, ss.desc, new_value_dict.items())
+            print ss.to_json()
+        else:
+            logging.warning('Sample set %s has no hits' % (ss.name))
 
 def rename(args):
     filename = args.sample_set_file
@@ -106,7 +139,7 @@ def to_json(args):
     for ss in _parse_sample_sets(filename, sep):
         print ss.to_json()
         
-def to_smt(args):
+def to_smx(args):
     filename = args.sample_set_file
     sep = args.sep
     prefix = args.prefix
@@ -120,7 +153,7 @@ def to_smt(args):
         for sample in sorted(ss.value_dict):
             lines.append('\t'.join([sample, str(ss.value_dict[sample])]))
         suffix = computerize_name(ss.name)
-        path = prefix + '.' + suffix + '.smt'
+        path = prefix + '.' + suffix + '.smx'
         with open(path, 'w') as f:
             for line in lines:
                 print >>f, line
@@ -209,11 +242,11 @@ def main():
     subparser = subparsers.add_parser('tojson')
     subparser.add_argument('sample_set_file') 
     subparser.set_defaults(func=to_json)
-    # convert to smt format
-    subparser = subparsers.add_parser('tosmt')
+    # convert to smx format
+    subparser = subparsers.add_parser('tosmx')
     subparser.add_argument('sample_set_file') 
     subparser.add_argument('prefix') 
-    subparser.set_defaults(func=to_smt)
+    subparser.set_defaults(func=to_smx)
     # rename
     subparser = subparsers.add_parser('rename')
     subparser.add_argument('--fromname', dest='fromname', default=None)
@@ -236,7 +269,16 @@ def main():
     subparser.add_argument('--miss', dest='miss_sets', action='append') 
     subparser.add_argument('sample_set_file')
     subparser.set_defaults(func=subset)
-    args = parser.parse_args()
+    # only include certain samples
+    subparser = subparsers.add_parser('newcohort')
+    subparser.add_argument('sample_set_file')
+    subparser.add_argument('cohort_file')
+    subparser.set_defaults(func=newcohort)
+    # get samples
+    subparser = subparsers.add_parser('getcohort')
+    subparser.add_argument('sample_set_file')
+    subparser.set_defaults(func=getcohort)
+    args = parser.parse_args()    
     return args.func(args)
  
 if __name__ == '__main__':

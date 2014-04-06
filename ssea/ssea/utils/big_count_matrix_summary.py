@@ -51,7 +51,7 @@ def main():
     for i in xrange(bm.shape[0]):
         t_id = bm.rownames[i]
         if t_id not in lengths:
-            logging.error('Transcript %s not found in metadata' % (t_id))
+            logging.warning('Transcript %s not found in metadata' % (t_id))
             continue
         length = lengths[t_id]
         a = bm.counts[i,:]
